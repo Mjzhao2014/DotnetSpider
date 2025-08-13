@@ -1,6 +1,7 @@
 using System;
 using DotnetSpider.Downloader;
 using DotnetSpider.Infrastructure;
+using DotnetSpider.Robots;
 using DotnetSpider.Statistic;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -74,6 +75,20 @@ public static class ServiceCollectionExtensions
     public static IHostBuilder UseDockerLifetime(this IHostBuilder builder)
     {
         builder.ConfigureServices(x => { x.AddSingleton<IHostLifetime, DockerLifeTime>(); });
+        return builder;
+    }
+
+    /// <summary>
+    /// Enable robots.txt compliance for the spider
+    /// </summary>
+    /// <param name="builder">The spider builder</param>
+    /// <returns>The builder for chaining</returns>
+    public static Builder UseRobotsTxt(this Builder builder)
+    {
+        builder.ConfigureServices(services =>
+        {
+            services.UseRobotsAwareDownloader();
+        });
         return builder;
     }
 }

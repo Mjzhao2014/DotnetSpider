@@ -55,4 +55,13 @@ public class ByteArrayContent(byte[] bytes) : IHttpContent
         Dispose(true);
         GC.SuppressFinalize(this);
     }
+
+    public override string ToString()
+    {
+        if (Bytes == null || Bytes.Length == 0)
+            return string.Empty;
+
+        // Use UTF-8 encoding by default
+        return System.Text.Encoding.UTF8.GetString(Bytes);
+    }
 }
