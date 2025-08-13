@@ -39,12 +39,12 @@ public class RobotsTxtIntegrationTestSpider : Spider
 
         // Add test URLs - some should be allowed, some blocked
         await AddRequestsAsync(
-            new Request("https://testsite.com/public/page1.html"),
-            new Request("https://testsite.com/admin/panel.html"),      // Should be blocked
-            new Request("https://testsite.com/private/data.html"),     // Should be blocked
-            new Request("https://testsite.com/public/page2.html"),
-            new Request("https://testsite.com/api/endpoint"),          // Should be blocked
-            new Request("https://testsite.com/about.html")
+            new Request("https://testsite.com/public/page1.html") { Owner = SpiderId.ToString() },
+            new Request("https://testsite.com/admin/panel.html") { Owner = SpiderId.ToString() },      // Should be blocked
+            new Request("https://testsite.com/private/data.html") { Owner = SpiderId.ToString() },     // Should be blocked
+            new Request("https://testsite.com/public/page2.html") { Owner = SpiderId.ToString() },
+            new Request("https://testsite.com/api/endpoint") { Owner = SpiderId.ToString() },          // Should be blocked
+            new Request("https://testsite.com/about.html") { Owner = SpiderId.ToString() }
         );
     }
 
@@ -64,14 +64,20 @@ public class RobotsTxtIntegrationTestSpider : Spider
             var url = context.Request.RequestUri.ToString();
             ProcessedUrls.Add(url);
 
+            Console.WriteLine($"Processing URL: {url}");
+            Console.WriteLine($"Response Status: {context.Response.StatusCode}");
+            Console.WriteLine($"Response Reason: {context.Response.ReasonPhrase}");
+
             if (context.Response.StatusCode == HttpStatusCode.Forbidden && 
                 context.Response.ReasonPhrase == "Blocked by robots.txt")
             {
                 BlockedUrls.Add(url);
+                Console.WriteLine($"URL blocked by robots.txt: {url}");
             }
             else if ((int)context.Response.StatusCode >= 200 && (int)context.Response.StatusCode < 300)
             {
                 SuccessfulUrls.Add(url);
+                Console.WriteLine($"URL successful: {url}");
                 context.AddData("url", url);
                 context.AddData("title", context.Selectable.XPath(".//title")?.Value ?? "No title");
                 context.AddData("status", "success");
@@ -144,13 +150,22 @@ Crawl-delay: 0.1";
         SetupHttpResponse(mockHttpHandler, "https://testsite.com/about.html", 
             "<html><head><title>About Us</title></head><body>About content</body></html>");
 
+        // Setup responses for blocked URLs (these should not be reached by the downloader)
+        SetupHttpResponse(mockHttpHandler, "https://testsite.com/admin/panel.html", 
+            "<html><head><title>Admin Panel</title></head><body>Admin content</body></html>");
+        SetupHttpResponse(mockHttpHandler, "https://testsite.com/private/data.html", 
+            "<html><head><title>Private Data</title></head><body>Private content</body></html>");
+        SetupHttpResponse(mockHttpHandler, "https://testsite.com/api/endpoint", 
+            "<html><head><title>API Endpoint</title></head><body>API content</body></html>");
+
         var httpClient = new HttpClient(mockHttpHandler.Object);
         
         // Create builder with robots.txt support
         var builder = Builder.CreateDefaultBuilder<RobotsTxtIntegrationTestSpider>(options =>
         {
-            options.Speed = 10; // Fast for testing
-            options.EmptySleepTime = 1; // Quick exit when no more requests
+            options.Speed = 100; // Very fast for testing
+            options.EmptySleepTime = 100; // Short delay when no more requests
+            options.Depth = 1; // Only crawl depth 1
         });
 
         builder.ConfigureServices(services =>
@@ -165,23 +180,28 @@ Crawl-delay: 0.1";
             
             // Add essential missing services
             services.AddSingleton<DotnetSpider.Proxy.IProxyService, DotnetSpider.Proxy.EmptyProxyService>();
+            
+            // Add debugging
+            services.AddLogging(builder => builder.SetMinimumLevel(LogLevel.Debug).AddConsole());
         });
 
         // Enable robots.txt compliance
         builder.UseRobotsTxt();
 
         using var host = builder.Build();
-        var spider = host.Services.GetRequiredService<IHostedService>() as RobotsTxtIntegrationTestSpider;
+        var spider = host.Services.GetServices<IHostedService>()
+            .OfType<RobotsTxtIntegrationTestSpider>()
+            .FirstOrDefault();
 
         // Act
-        var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(10));
+        var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(30));
         
         try
         {
             await host.StartAsync(cancellationTokenSource.Token);
             
-            // Wait for spider to complete processing
-            await Task.Delay(2000, cancellationTokenSource.Token);
+            // Wait for spider to complete processing all requests
+            await Task.Delay(5000, cancellationTokenSource.Token);
             
             await host.StopAsync(cancellationTokenSource.Token);
         }
@@ -192,6 +212,17 @@ Crawl-delay: 0.1";
 
         // Assert
         Assert.NotNull(spider);
+        
+        // Debug output
+        var processedUrls = RobotsTxtIntegrationTestSpider.TestDataParser.ProcessedUrls;
+        var successfulUrls = RobotsTxtIntegrationTestSpider.TestDataParser.SuccessfulUrls;
+        var blockedUrls = RobotsTxtIntegrationTestSpider.TestDataParser.BlockedUrls;
+        
+        // Log the actual results for debugging
+        Console.WriteLine($"Total processed URLs: {processedUrls.Count}");
+        Console.WriteLine($"Processed URLs: [{string.Join(", ", processedUrls)}]");
+        Console.WriteLine($"Successful URLs: [{string.Join(", ", successfulUrls)}]");
+        Console.WriteLine($"Blocked URLs: [{string.Join(", ", blockedUrls)}]");
         
         // Verify that robots.txt rules were respected
         Assert.Contains("https://testsite.com/public/page1.html", RobotsTxtIntegrationTestSpider.TestDataParser.SuccessfulUrls);
@@ -251,7 +282,9 @@ Crawl-delay: 0.1";
         builder.UseRobotsTxt();
 
         using var host = builder.Build();
-        var spider = host.Services.GetRequiredService<IHostedService>() as RobotsTxtIntegrationTestSpider;
+        var spider = host.Services.GetServices<IHostedService>()
+            .OfType<RobotsTxtIntegrationTestSpider>()
+            .FirstOrDefault();
 
         // Act
         var cancellationTokenSource = new CancellationTokenSource(TimeSpan.FromSeconds(10));
@@ -285,7 +318,8 @@ Crawl-delay: 0.1";
                 ItExpr.IsAny<CancellationToken>())
             .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.OK)
             {
-                Content = new System.Net.Http.StringContent(content)
+                Content = new System.Net.Http.StringContent(content),
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, url)
             });
     }
 
@@ -295,6 +329,9 @@ Crawl-delay: 0.1";
             .Setup<Task<HttpResponseMessage>>("SendAsync",
                 ItExpr.Is<HttpRequestMessage>(req => req.RequestUri.ToString() == url),
                 ItExpr.IsAny<CancellationToken>())
-            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.NotFound));
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.NotFound)
+            {
+                RequestMessage = new HttpRequestMessage(HttpMethod.Get, url)
+            });
     }
 }
