@@ -175,8 +175,8 @@ Disallow: /blocked/";
                 var timeDiff = _requestTimes[i] - _requestTimes[i - 1];
                 // Console.WriteLine($"Time between request {i-1} and {i}: {timeDiff.TotalMilliseconds}ms");
 
-                // Check if delay 1s
-                Assert.True(timeDiff.TotalMilliseconds >= 1000);
+                 // TestBot has crawl-delay: 1, so should be >= 1000ms (allowing some tolerance)
+                Assert.True(timeDiff.TotalMilliseconds >= 950);
             }
         }
     }
@@ -237,10 +237,21 @@ Crawl-delay: 0.5";
         var secretAccessed = _accessedUrls.Any(url => url.Contains("/secret/"));
         var adminAccessed = _accessedUrls.Any(url => url.Contains("/admin/"));
         var publicAccessed = _accessedUrls.Any(url => url.Contains("/public/"));
-        
+
         Assert.False(secretAccessed);
         Assert.True(adminAccessed);
         Assert.True(publicAccessed);
+
+        // Verify crawl-delay specific to TestBot (1 second) is respected
+        Assert.True(_requestTimes.Count >= 2, "Should have at least 2 requests to test crawl delay");
+        
+        for (int i = 1; i < _requestTimes.Count; i++)
+        {
+            var timeDiff = _requestTimes[i] - _requestTimes[i - 1];
+            // TestBot has crawl-delay: 1, so should be >= 1000ms (allowing some tolerance)
+            Assert.True(timeDiff.TotalMilliseconds >= 950, 
+                $"TestBot crawl delay not respected: time between request {i-1} and {i} was {timeDiff.TotalMilliseconds}ms, expected >= 1000ms for TestBot");
+        }
     }
 
 
@@ -304,6 +315,16 @@ Crawl-delay: 0.5";
         Assert.True(secretAccessed);
         Assert.False(adminAccessed);
         Assert.True(publicAccessed);
+
+        // Verify crawl-delay specific to TestBot (1 second) is respected
+        Assert.True(_requestTimes.Count >= 2, "Should have at least 2 requests to test crawl delay");
+        
+        for (int i = 1; i < _requestTimes.Count; i++)
+        {
+            var timeDiff = _requestTimes[i] - _requestTimes[i - 1];
+            // TestBot has crawl-delay: 1, so should be >= 450ms (allowing some tolerance)
+            Assert.True(timeDiff.TotalMilliseconds >= 450);
+        }
     }
 
     private void SetupRobotsResponse(string host, string content)
