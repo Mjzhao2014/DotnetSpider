@@ -182,36 +182,43 @@ Disallow: /blocked/";
     }
 
     [Fact]
-    public async Task UseRobotsTxt_E2E_UserAgentSpecificRules()
+    public async Task UseRobotsTxt_E2E_UserAgentSpecificRules_TestBot()
     {
         // Arrange: Setup robots.txt with user-agent specific rules
+        // TestBot is only blocked from /secret/, but allowed to access /admin/
+        // * (all other bots) are blocked from /admin/ but can access /secret/
         var robotsContent = @"
 User-agent: TestBot
 Disallow: /secret/
-Crawl-delay: 2
+Crawl-delay: 1
 
 User-agent: *
 Disallow: /admin/
 Crawl-delay: 0.5";
 
         SetupRobotsResponse("agent-test.com", robotsContent);
-        
-        SetupPageResponse("https://agent-test.com/", 
+
+        // Setup all pages that might be accessed
+        SetupPageResponse("https://agent-test.com/",
             "<html><body><h1>Home</h1><a href='/secret/data.html'>Secret</a><a href='/admin/panel.html'>Admin</a><a href='/public/info.html'>Public</a></body></html>");
-        SetupPageResponse("https://agent-test.com/public/info.html", 
+        SetupPageResponse("https://agent-test.com/public/info.html",
             "<html><body><h1>Public Info</h1></body></html>");
+        SetupPageResponse("https://agent-test.com/admin/panel.html",
+            "<html><body><h1>Admin Panel</h1></body></html>");
+        SetupPageResponse("https://agent-test.com/secret/data.html",
+            "<html><body><h1>Secret Data</h1></body></html>");
 
         TestContext.Current = this;
 
-        // Act: Create spider with specific user agent
+        // Act: Create spider with TestBot user agent
         var builder = Builder.CreateDefaultBuilder<UserAgentTestSpider>(options =>
         {
             options.Speed = 10;
             options.Depth = 2;
         });
-        
+
         builder.UseRobotsTxt();
-        
+
         builder.ConfigureServices(services =>
         {
             services.AddSingleton(_httpFactoryMock.Object);
@@ -220,26 +227,83 @@ Crawl-delay: 0.5";
 
         var spider = builder.Build();
         using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
-        
+
         await spider.RunAsync(cts.Token);
 
-        // Assert: Verify basic functionality
+        // Assert: Verify user-agent specific rules are respected
         Assert.NotEmpty(_accessedUrls);
-        Console.WriteLine($"Accessed URLs: {string.Join(", ", _accessedUrls)}");
-        
-        // Should access allowed URLs
-        Assert.Contains(_accessedUrls, url => url.Contains("agent-test.com/"));
-        
-        // Log what URLs were accessed for debugging
+
+        // Check what URLs were accessed
         var secretAccessed = _accessedUrls.Any(url => url.Contains("/secret/"));
         var adminAccessed = _accessedUrls.Any(url => url.Contains("/admin/"));
         var publicAccessed = _accessedUrls.Any(url => url.Contains("/public/"));
         
-        Console.WriteLine($"Secret accessed: {secretAccessed} (should be false for TestBot)");
-        Console.WriteLine($"Admin accessed: {adminAccessed} (should be true for TestBot)");
-        Console.WriteLine($"Public accessed: {publicAccessed} (should be true)");
-        
-        
+        Assert.False(secretAccessed);
+        Assert.True(adminAccessed);
+        Assert.True(publicAccessed);
+    }
+
+
+    [Fact]
+    public async Task UseRobotsTxt_E2E_UserAgentSpecificRules_OtherAgent()
+    {
+        // Arrange: Setup robots.txt with user-agent specific rules
+        // TestBot is only blocked from /secret/, but allowed to access /admin/
+        // * (all other bots) are blocked from /admin/ but can access /secret/
+        var robotsContent = @"
+User-agent: TestBot
+Disallow: /secret/
+Crawl-delay: 1
+
+User-agent: *
+Disallow: /admin/
+Crawl-delay: 0.5";
+
+        SetupRobotsResponse("agent-test.com", robotsContent);
+
+        // Setup all pages that might be accessed
+        SetupPageResponse("https://agent-test.com/",
+            "<html><body><h1>Home</h1><a href='/secret/data.html'>Secret</a><a href='/admin/panel.html'>Admin</a><a href='/public/info.html'>Public</a></body></html>");
+        SetupPageResponse("https://agent-test.com/public/info.html",
+            "<html><body><h1>Public Info</h1></body></html>");
+        SetupPageResponse("https://agent-test.com/admin/panel.html",
+            "<html><body><h1>Admin Panel</h1></body></html>");
+        SetupPageResponse("https://agent-test.com/secret/data.html",
+            "<html><body><h1>Secret Data</h1></body></html>");
+
+        TestContext.Current = this;
+
+        // Act: Create spider with TestBot user agent
+        var builder = Builder.CreateDefaultBuilder<ComprehensiveTestSpider>(options =>
+        {
+            options.Speed = 10;
+            options.Depth = 2;
+        });
+
+        builder.UseRobotsTxt();
+
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        await spider.RunAsync(cts.Token);
+
+        // Assert: Verify user-agent specific rules are respected
+        Assert.NotEmpty(_accessedUrls);
+
+        // Check what URLs were accessed
+        var secretAccessed = _accessedUrls.Any(url => url.Contains("/secret/"));
+        var adminAccessed = _accessedUrls.Any(url => url.Contains("/admin/"));
+        var publicAccessed = _accessedUrls.Any(url => url.Contains("/public/"));
+
+        Assert.True(secretAccessed);
+        Assert.False(adminAccessed);
+        Assert.True(publicAccessed);
     }
 
     private void SetupRobotsResponse(string host, string content)
