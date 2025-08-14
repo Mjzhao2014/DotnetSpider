@@ -20,6 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using DotnetSpider.Robots;
 
 [assembly: InternalsVisibleTo("DotnetSpider.Tests")]
 
@@ -35,6 +36,8 @@ public abstract class Spider :
     private readonly DependenceServices _services;
     private readonly IList<DataParser> _dataParsers;
     private ResponseDelegate _delegate;
+    private readonly IRobotsTxtService _robotsTxtService;
+
 
     /// <summary>
     /// 请求 Timeout 事件
@@ -86,6 +89,9 @@ public abstract class Spider :
         _requestSuppliers = new List<IRequestSupplier>();
         _flowBuilder = new();
         _dataParsers = new List<DataParser>();
+
+        // robots.txt support is optional; if registered conduct lookups
+        _robotsTxtService = services.ServiceProvider.GetService(typeof(DotnetSpider.Robots.IRobotsTxtService)) as DotnetSpider.Robots.IRobotsTxtService;
     }
 
     /// <summary>
@@ -564,6 +570,19 @@ public abstract class Spider :
         {
             foreach (var request in requests)
             {
+                if (_robotsTxtService != null)
+                {
+                    // ensure robots.txt information is cached for this host
+                    await _robotsTxtService.EnsureRulesForUriAsync(request.RequestUri);
+                    // If disallowed by robots.txt, skip adding this request
+                    if (!await _robotsTxtService.IsAllowedAsync(request.RequestUri))
+                    {
+                        Logger.LogInformation("Skipping {RequestUri} due to robots.txt disallow", request.RequestUri);
+                        continue;
+                    }
+                    // enforce crawl-delay per host if specified
+                    await _robotsTxtService.EnforceDelayAsync(request.RequestUri);
+                }
                 // string topic;
                 // request.Timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
                 // if (string.IsNullOrWhiteSpace(request.Agent))
@@ -619,6 +638,10 @@ public abstract class Spider :
             foreach (var request in await requestSupplier.GetAllListAsync(stoppingToken))
             {
                 await AddRequestsAsync(request);
+                if (_robotsTxtService != null)
+                {
+                    await _robotsTxtService.EnsureRulesForUriAsync(request.RequestUri);
+                }
             }
 
             Logger.LogInformation(
