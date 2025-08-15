@@ -46,4 +46,11 @@ public class SpiderOptions
     /// 获取新代码的时间间隔
     /// </summary>
     public int RefreshProxy { get; set; } = 30;
+
+    /// <summary>
+    /// Whether to respect robots.txt directives (disallow/allow/crawl-delay) for target hosts.
+    /// Defaults to false; when enabled, requests to disallowed paths will be skipped
+    /// and crawl-delay will be enforced per host.
+    /// </summary>
+    public bool UseRobotsTxt { get; set; } = false;
 }

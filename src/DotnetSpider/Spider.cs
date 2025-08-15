@@ -20,6 +20,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using DotnetSpider.Robots;
 
 [assembly: InternalsVisibleTo("DotnetSpider.Tests")]
 
@@ -194,6 +195,12 @@ public abstract class Spider :
 
         var list = new List<Request>();
 
+        IRobotsTxtManager robotsManager = null;
+        if (Options.UseRobotsTxt)
+        {
+            robotsManager = _services.ServiceProvider.GetService(typeof(IRobotsTxtManager)) as IRobotsTxtManager;
+        }
+
         foreach (var request in requests)
         {
             if (string.IsNullOrWhiteSpace(request.Downloader))
@@ -224,7 +231,24 @@ public abstract class Spider :
             }
 
             request.Owner = SpiderId.Id;
-
+            // If respecting robots, ensure request is allowed for this host
+            if (robotsManager != null)
+            {
+                var robots = await robotsManager.GetRobotsTxtAsync(request.RequestUri);
+                if (robots != null)
+                {
+                    var userAgent = request.Headers.UserAgent;
+                    if (string.IsNullOrWhiteSpace(userAgent))
+                    {
+                        userAgent = "Mozilla/5.0";
+                    }
+                    if (!robots.IsAllowed(userAgent, request.RequestUri.AbsolutePath))
+                    {
+                        // Skip disallowed requests
+                        continue;
+                    }
+                }
+            }
             list.Add(request);
         }
 
@@ -402,6 +426,14 @@ public abstract class Spider :
             var start = DateTime.Now;
             var end = start;
 
+            // track last request time per host if respecting robots crawl-delay
+            var lastRequestPerHost = new Dictionary<string, DateTime>();
+            IRobotsTxtManager robotsManager = null;
+            if (Options.UseRobotsTxt)
+            {
+                robotsManager = _services.ServiceProvider.GetService(typeof(IRobotsTxtManager)) as IRobotsTxtManager;
+            }
+
             PrintStatistics(stoppingToken);
 
             while (!stoppingToken.IsCancellationRequested)
@@ -446,6 +478,32 @@ public abstract class Spider :
                         while (bucket.ShouldThrottle(1, out var waitTimeMillis))
                         {
                             await Task.Delay(waitTimeMillis, default(CancellationToken));
+                        }
+
+                        if (Options.UseRobotsTxt && robotsManager != null)
+                        {
+                            var hostKey = request.RequestUri.Host.ToLowerInvariant();
+                            var robots = await robotsManager.GetRobotsTxtAsync(request.RequestUri);
+                            if (robots != null)
+                            {
+                                var delaySeconds = robots.GetCrawlDelay(request.Headers.UserAgent ?? "Mozilla/5.0");
+                                if (delaySeconds.HasValue && delaySeconds.Value > 0)
+                                {
+                                    if (lastRequestPerHost.TryGetValue(hostKey, out var lastTime))
+                                    {
+                                        var diff = DateTime.UtcNow - lastTime;
+                                        if (diff.TotalSeconds < delaySeconds.Value)
+                                        {
+                                            var waitMillis = (int)((delaySeconds.Value - diff.TotalSeconds) * 1000);
+                                            if (waitMillis > 0)
+                                            {
+                                                await Task.Delay(waitMillis, default);
+                                            }
+                                        }
+                                    }
+                                    lastRequestPerHost[hostKey] = DateTime.UtcNow;
+                                }
+                            }
                         }
 
                         if (!await PublishRequestMessagesAsync(request))
