@@ -46,4 +46,9 @@ public class SpiderOptions
     /// 获取新代码的时间间隔
     /// </summary>
     public int RefreshProxy { get; set; } = 30;
+
+    /// <summary>
+    /// When enabled, the crawler will fetch and honor robots.txt for target hosts.
+    /// </summary>
+    public bool UseRobotsTxt { get; set; } = false;
 }
