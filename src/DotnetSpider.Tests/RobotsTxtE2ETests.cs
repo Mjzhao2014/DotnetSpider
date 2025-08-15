@@ -314,8 +314,11 @@ Crawl-delay: 0.5";
         var adminAccessed = _accessedUrls.Any(url => url.Contains("/admin/"));
         var publicAccessed = _accessedUrls.Any(url => url.Contains("/public/"));
 
+        // TestBot should be blocked from /secret/ (per TestBot-specific rules)
         Assert.False(secretAccessed);
+        // TestBot should be allowed to access /admin/ (wildcard rules don't apply to TestBot)
         Assert.True(adminAccessed);
+        // TestBot should be allowed to access /public/ (no restrictions)
         Assert.True(publicAccessed);
 
         // Verify crawl-delay specific to TestBot (1 second) is respected
@@ -344,7 +347,7 @@ Crawl-delay: 1
 
 User-agent: *
 Disallow: /admin/
-Crawl-delay: 0.5";
+Crawl-delay: 1.5";
 
         SetupRobotsResponse("agent-test.com", robotsContent);
 
@@ -360,8 +363,8 @@ Crawl-delay: 0.5";
 
         TestContext.Current = this;
 
-        // Act: Create spider with TestBot user agent
-        var builder = Builder.CreateDefaultBuilder<ComprehensiveTestSpider>(options =>
+        // Act: Create spider with default user agent (not TestBot) to test wildcard rules
+        var builder = Builder.CreateDefaultBuilder<OtherAgentTestSpider>(options =>
         {
             options.Speed = 10;
             options.Depth = 2;
@@ -383,23 +386,30 @@ Crawl-delay: 0.5";
         // Assert: Verify user-agent specific rules are respected
         Assert.NotEmpty(_accessedUrls);
 
+        Assert.Equal(3, _accessedUrls.Count);
+
         // Check what URLs were accessed
         var secretAccessed = _accessedUrls.Any(url => url.Contains("/secret/"));
         var adminAccessed = _accessedUrls.Any(url => url.Contains("/admin/"));
         var publicAccessed = _accessedUrls.Any(url => url.Contains("/public/"));
 
+        // For agents other than TestBot, wildcard (*) rules apply:
+        // - Should access /secret/ (only TestBot is blocked from /secret/)
+        // - Should NOT access /admin/ (wildcard * blocks all other agents from /admin/)
+        // - Should access /public/ (no restrictions)
         Assert.True(secretAccessed);
         Assert.False(adminAccessed);
         Assert.True(publicAccessed);
 
-        // Verify crawl-delay specific to TestBot (1 second) is respected
+        // Verify crawl-delay specific to wildcard (*) rules (0.5 seconds) is respected
         Assert.True(_requestTimes.Count >= 2, "Should have at least 2 requests to test crawl delay");
         
         for (int i = 1; i < _requestTimes.Count; i++)
         {
             var timeDiff = _requestTimes[i] - _requestTimes[i - 1];
-            // TestBot has crawl-delay: 1, so should be >= 450ms (allowing some tolerance)
-            Assert.True(timeDiff.TotalMilliseconds >= 450);
+            // OtherAgent follows wildcard (*) rules with crawl-delay: 1.5, so should be >= 1500ms (allowing some tolerance)
+            Assert.True(timeDiff.TotalMilliseconds >= 1450,
+                $"OtherAgent crawl delay not respected: time between request {i-1} and {i} was {timeDiff.TotalMilliseconds}ms, expected >= 1500ms for wildcard rules");
         }
     }
 
@@ -486,8 +496,26 @@ Crawl-delay: 0.5";
         {
             await AddRequestsAsync(new Request("https://agent-test.com/")
             {
-                Headers = { ["User-Agent"] = "TestBot/1.0" }
+                Headers = { ["User-Agent"] = "TestBot" }
             });
+            AddDataFlow<TestDataParser>();
+        }
+    }
+
+    /// <summary>
+    /// Test spider with default user agent for testing wildcard (*) rules against other agents
+    /// </summary>
+    public class OtherAgentTestSpider : Spider
+    {
+        public OtherAgentTestSpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
+            : base(options, services, logger)
+        {
+        }
+
+        protected override async Task InitializeAsync(CancellationToken stoppingToken = default)
+        {
+            // Use default user agent (not TestBot) to test wildcard rules
+            await AddRequestsAsync(new Request("https://agent-test.com/"));
             AddDataFlow<TestDataParser>();
         }
     }
@@ -502,13 +530,30 @@ Crawl-delay: 0.5";
             // For the home page, directly add the specific URLs we want to test
             if (context.Request.RequestUri.AbsolutePath == "/")
             {
-                var urlsToTest = new[]
+                string[] urlsToTest;
+                
+                // Different URL patterns for different test domains
+                if (context.Request.RequestUri.Host == "agent-test.com")
                 {
-                    "/public/info.html",
-                    "/admin/info.html", 
-                    "/private/info.html",
-                    "/public/info.pdf"
-                };
+                    // URLs for user-agent specific tests
+                    urlsToTest = new[]
+                    {
+                        "/public/info.html",
+                        "/admin/panel.html", 
+                        "/secret/data.html"
+                    };
+                }
+                else
+                {
+                    // URLs for other tests (example.com)
+                    urlsToTest = new[]
+                    {
+                        "/public/info.html",
+                        "/admin/info.html", 
+                        "/private/info.html",
+                        "/public/info.pdf"
+                    };
+                }
                 
                 foreach (var url in urlsToTest)
                 {
