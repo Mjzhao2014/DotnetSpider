@@ -575,7 +575,7 @@ Crawl-delay: 0.1";
 
         TestContext.Current = this;
 
-        // Act: Use "TestBotAdvanced" user-agent which should match "Test" prefix
+        // Act: Use "TestBot/1.0" user-agent which should match "Test" prefix
         var builder = Builder.CreateDefaultBuilder<PrefixTestSpider>(options =>
         {
             options.Speed = 1;
@@ -598,7 +598,7 @@ Crawl-delay: 0.1";
         // Assert: Verify prefix matching works
         Assert.NotEmpty(_accessedUrls);
         
-        // "TestBotAdvanced" should match "Test" prefix rules
+        // "TestBot/1.0" should match "Test" prefix rules
         // Should NOT access /test-blocked/ (blocked for Test prefix)
         Assert.DoesNotContain(_accessedUrls, url => url.Contains("/test-blocked/"));
         
@@ -875,7 +875,7 @@ Crawl-delay: 0.1";
         {
             await AddRequestsAsync(new Request("https://prefix-test.com/")
             {
-                Headers = { ["User-Agent"] = "TestBotAdvanced" } // Should match "Test" prefix
+                Headers = { ["User-Agent"] = "TestBot/1.0" } // Should match "Test" prefix
             });
             AddDataFlow<TestDataParser>();
         }
