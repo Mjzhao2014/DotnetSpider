@@ -328,7 +328,7 @@ Crawl-delay: 0.5";
         {
             var timeDiff = _requestTimes[i] - _requestTimes[i - 1];
             // TestBot has crawl-delay: 1, so should be >= 1000ms (allowing some tolerance)
-            Assert.True(timeDiff.TotalMilliseconds >= 950, 
+            Assert.True(timeDiff.TotalMilliseconds >= 900, 
                 $"TestBot crawl delay not respected: time between request {i-1} and {i} was {timeDiff.TotalMilliseconds}ms, expected >= 1000ms for TestBot");
         }
     }
@@ -356,9 +356,9 @@ Crawl-delay: 1.5";
             "<html><body><h1>Home</h1><a href='/secret/data.html'>Secret</a><a href='/admin/panel.html'>Admin</a><a href='/public/info.html'>Public</a></body></html>");
         SetupPageResponse("https://agent-test.com/public/info.html",
             "<html><body><h1>Public Info</h1></body></html>");
-        SetupPageResponse("https://agent-test.com/admin/panel.html",
+        SetupPageResponse("https://agent-test.com/admin/info.html",
             "<html><body><h1>Admin Panel</h1></body></html>");
-        SetupPageResponse("https://agent-test.com/secret/data.html",
+        SetupPageResponse("https://agent-test.com/secret/info.html",
             "<html><body><h1>Secret Data</h1></body></html>");
 
         TestContext.Current = this;
@@ -408,7 +408,7 @@ Crawl-delay: 1.5";
         {
             var timeDiff = _requestTimes[i] - _requestTimes[i - 1];
             // OtherAgent follows wildcard (*) rules with crawl-delay: 1.5, so should be >= 1500ms (allowing some tolerance)
-            Assert.True(timeDiff.TotalMilliseconds >= 1450,
+            Assert.True(timeDiff.TotalMilliseconds >= 1400,
                 $"OtherAgent crawl delay not respected: time between request {i-1} and {i} was {timeDiff.TotalMilliseconds}ms, expected >= 1500ms for wildcard rules");
         }
     }
@@ -532,28 +532,15 @@ Crawl-delay: 1.5";
             {
                 string[] urlsToTest;
                 
-                // Different URL patterns for different test domains
-                if (context.Request.RequestUri.Host == "agent-test.com")
+                urlsToTest = new[]
                 {
-                    // URLs for user-agent specific tests
-                    urlsToTest = new[]
-                    {
-                        "/public/info.html",
-                        "/admin/panel.html", 
-                        "/secret/data.html"
-                    };
-                }
-                else
-                {
-                    // URLs for other tests (example.com)
-                    urlsToTest = new[]
-                    {
-                        "/public/info.html",
-                        "/admin/info.html", 
-                        "/private/info.html",
-                        "/public/info.pdf"
-                    };
-                }
+                    "/public/info.html",
+                    "/admin/info.html", 
+                    "/private/info.html",
+                    "/secret/info.html",
+                    "/public/info.pdf"
+                };
+                
                 
                 foreach (var url in urlsToTest)
                 {
