@@ -413,6 +413,382 @@ Crawl-delay: 1.5";
         }
     }
 
+    [Fact]
+    public async Task UseRobotsTxt_E2E_AllowOverridesDisallow()
+    {
+        // Arrange: Test Allow directive that overrides broader Disallow rules
+        var robotsContent = @"
+User-agent: *
+Disallow: /private/
+Allow: /private/public-info/
+Crawl-delay: 0.1";
+
+        SetupRobotsResponse("allow-test.com", robotsContent);
+        
+        SetupPageResponse("https://allow-test.com/", 
+            @"<html><body>
+                <h1>Home</h1>
+                <a href='/private/secret.html'>Private Secret</a>
+                <a href='/private/public-info/data.html'>Public Info in Private</a>
+                <a href='/public/info.html'>Public</a>
+              </body></html>");
+        SetupPageResponse("https://allow-test.com/public/info.html", 
+            "<html><body><h1>Public Info</h1></body></html>");
+        SetupPageResponse("https://allow-test.com/private/secret.html", 
+            "<html><body><h1>Private Secret</h1></body></html>");
+        SetupPageResponse("https://allow-test.com/private/public-info/data.html", 
+            "<html><body><h1>Public Info in Private Area</h1></body></html>");
+
+        TestContext.Current = this;
+
+        var builder = Builder.CreateDefaultBuilder<AllowTestSpider>(options =>
+        {
+            options.Speed = 1;
+            options.Depth = 2;
+        });
+        
+        builder.UseRobotsTxt();
+        
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        
+        await spider.RunAsync(cts.Token);
+
+        // Assert: Verify Allow overrides Disallow
+        Assert.NotEmpty(_accessedUrls);
+        
+        // Should access home and public pages
+        Assert.Contains(_accessedUrls, url => url.Contains("allow-test.com/"));
+        Assert.Contains(_accessedUrls, url => url.Contains("/public/"));
+        
+        // Should NOT access /private/secret.html (blocked by Disallow: /private/)
+        Assert.DoesNotContain(_accessedUrls, url => url.Contains("/private/secret.html"));
+        
+        // Should access /private/public-info/ (allowed by Allow: /private/public-info/)
+        Assert.Contains(_accessedUrls, url => url.Contains("/private/public-info/"));
+    }
+
+    [Fact]
+    public async Task UseRobotsTxt_E2E_CaseInsensitiveMatching()
+    {
+        // Arrange: Test case-insensitive user-agent matching
+        var robotsContent = @"
+User-agent: testbot
+Disallow: /secret/
+Crawl-delay: 0.5
+
+User-agent: *
+Disallow: /admin/
+Crawl-delay: 0.1";
+
+        SetupRobotsResponse("case-test.com", robotsContent);
+        
+        SetupPageResponse("https://case-test.com/", 
+            @"<html><body>
+                <h1>Home</h1>
+                <a href='/secret/data.html'>Secret</a>
+                <a href='/admin/panel.html'>Admin</a>
+                <a href='/public/info.html'>Public</a>
+              </body></html>");
+        SetupPageResponse("https://case-test.com/public/info.html", 
+            "<html><body><h1>Public Info</h1></body></html>");
+        SetupPageResponse("https://case-test.com/admin/panel.html", 
+            "<html><body><h1>Admin Panel</h1></body></html>");
+        SetupPageResponse("https://case-test.com/secret/data.html", 
+            "<html><body><h1>Secret Data</h1></body></html>");
+
+        TestContext.Current = this;
+
+        // Act: Use "TESTBOT" (uppercase) to test case-insensitive matching with "testbot" (lowercase) in robots.txt
+        var builder = Builder.CreateDefaultBuilder<CaseTestSpider>(options =>
+        {
+            options.Speed = 1;
+            options.Depth = 2;
+        });
+        
+        builder.UseRobotsTxt();
+        
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        
+        await spider.RunAsync(cts.Token);
+
+        // Assert: Verify case-insensitive matching works
+        Assert.NotEmpty(_accessedUrls);
+        
+        // TESTBOT should match "testbot" rules (case-insensitive)
+        // Should NOT access /secret/ (blocked for testbot)
+        Assert.DoesNotContain(_accessedUrls, url => url.Contains("/secret/"));
+        
+        // Should access /admin/ (testbot is not blocked from admin, only * is)
+        Assert.Contains(_accessedUrls, url => url.Contains("/admin/"));
+        
+        // Should access /public/
+        Assert.Contains(_accessedUrls, url => url.Contains("/public/"));
+    }
+
+    [Fact]
+    public async Task UseRobotsTxt_E2E_PrefixMatching()
+    {
+        // Arrange: Test prefix matching for user-agents
+        var robotsContent = @"
+User-agent: GoogleBot
+Disallow: /google-blocked/
+
+User-agent: Test
+Disallow: /test-blocked/
+
+User-agent: *
+Disallow: /wildcard-blocked/
+Crawl-delay: 0.1";
+
+        SetupRobotsResponse("prefix-test.com", robotsContent);
+        
+        SetupPageResponse("https://prefix-test.com/", 
+            @"<html><body>
+                <h1>Home</h1>
+                <a href='/google-blocked/data.html'>Google Blocked</a>
+                <a href='/test-blocked/data.html'>Test Blocked</a>
+                <a href='/wildcard-blocked/data.html'>Wildcard Blocked</a>
+                <a href='/public/info.html'>Public</a>
+              </body></html>");
+        SetupPageResponse("https://prefix-test.com/public/info.html", 
+            "<html><body><h1>Public Info</h1></body></html>");
+        SetupPageResponse("https://prefix-test.com/google-blocked/data.html", 
+            "<html><body><h1>Google Blocked Data</h1></body></html>");
+        SetupPageResponse("https://prefix-test.com/test-blocked/data.html", 
+            "<html><body><h1>Test Blocked Data</h1></body></html>");
+        SetupPageResponse("https://prefix-test.com/wildcard-blocked/data.html", 
+            "<html><body><h1>Wildcard Blocked Data</h1></body></html>");
+
+        TestContext.Current = this;
+
+        // Act: Use "TestBotAdvanced" user-agent which should match "Test" prefix
+        var builder = Builder.CreateDefaultBuilder<PrefixTestSpider>(options =>
+        {
+            options.Speed = 1;
+            options.Depth = 2;
+        });
+        
+        builder.UseRobotsTxt();
+        
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        
+        await spider.RunAsync(cts.Token);
+
+        // Assert: Verify prefix matching works
+        Assert.NotEmpty(_accessedUrls);
+        
+        // "TestBotAdvanced" should match "Test" prefix rules
+        // Should NOT access /test-blocked/ (blocked for Test prefix)
+        Assert.DoesNotContain(_accessedUrls, url => url.Contains("/test-blocked/"));
+        
+        // Should access /google-blocked/ (not blocked for Test prefix)
+        Assert.Contains(_accessedUrls, url => url.Contains("/google-blocked/"));
+        
+        // Should NOT access /wildcard-blocked/ (since specific Test rule takes precedence over *)
+        // Wait, this is wrong - if Test matches, wildcard rules don't apply
+        // Let me check the spec again... Actually, Test rules should take precedence
+        // So it should access /wildcard-blocked/ since only /test-blocked/ is blocked for Test
+        Assert.Contains(_accessedUrls, url => url.Contains("/wildcard-blocked/"));
+        
+        // Should access /public/
+        Assert.Contains(_accessedUrls, url => url.Contains("/public/"));
+    }
+
+    [Fact]
+    public async Task UseRobotsTxt_E2E_MissingRobotsFile()
+    {
+        // Arrange: Setup to return 404 for robots.txt
+        _httpMock.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.Is<HttpRequestMessage>(req => req.RequestUri.ToString().Contains("robots.txt")),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync(new HttpResponseMessage(HttpStatusCode.NotFound));
+        
+        SetupPageResponse("https://missing-robots.com/", 
+            @"<html><body>
+                <h1>Home</h1>
+                <a href='/admin/panel.html'>Admin</a>
+                <a href='/private/data.html'>Private</a>
+                <a href='/secret/info.html'>Secret</a>
+              </body></html>");
+        SetupPageResponse("https://missing-robots.com/admin/panel.html", 
+            "<html><body><h1>Admin Panel</h1></body></html>");
+        SetupPageResponse("https://missing-robots.com/private/data.html", 
+            "<html><body><h1>Private Data</h1></body></html>");
+        SetupPageResponse("https://missing-robots.com/secret/info.html", 
+            "<html><body><h1>Secret Info</h1></body></html>");
+
+        TestContext.Current = this;
+
+        var builder = Builder.CreateDefaultBuilder<MissingRobotsTestSpider>(options =>
+        {
+            options.Speed = 1;
+            options.Depth = 2;
+        });
+        
+        builder.UseRobotsTxt();
+        
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        
+        await spider.RunAsync(cts.Token);
+
+        // Assert: When robots.txt is missing, full access should be allowed
+        Assert.NotEmpty(_accessedUrls);
+        
+        // Should access ALL URLs when robots.txt is missing
+        Assert.Contains(_accessedUrls, url => url.Contains("missing-robots.com/"));
+        Assert.Contains(_accessedUrls, url => url.Contains("/admin/"));
+        Assert.Contains(_accessedUrls, url => url.Contains("/private/"));
+        Assert.Contains(_accessedUrls, url => url.Contains("/secret/"));
+    }
+
+    [Fact]
+    public async Task UseRobotsTxt_E2E_EmptyRobotsFile()
+    {
+        // Arrange: Setup empty robots.txt
+        SetupRobotsResponse("empty-robots.com", "");
+        
+        SetupPageResponse("https://empty-robots.com/", 
+            @"<html><body>
+                <h1>Home</h1>
+                <a href='/admin/panel.html'>Admin</a>
+                <a href='/private/data.html'>Private</a>
+              </body></html>");
+        SetupPageResponse("https://empty-robots.com/admin/panel.html", 
+            "<html><body><h1>Admin Panel</h1></body></html>");
+        SetupPageResponse("https://empty-robots.com/private/data.html", 
+            "<html><body><h1>Private Data</h1></body></html>");
+
+        TestContext.Current = this;
+
+        var builder = Builder.CreateDefaultBuilder<EmptyRobotsTestSpider>(options =>
+        {
+            options.Speed = 1;
+            options.Depth = 2;
+        });
+        
+        builder.UseRobotsTxt();
+        
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        
+        await spider.RunAsync(cts.Token);
+
+        // Assert: Empty robots.txt should allow full access
+        Assert.NotEmpty(_accessedUrls);
+        
+        // Should access ALL URLs when robots.txt is empty
+        Assert.Contains(_accessedUrls, url => url.Contains("empty-robots.com/"));
+        Assert.Contains(_accessedUrls, url => url.Contains("/admin/"));
+        Assert.Contains(_accessedUrls, url => url.Contains("/private/"));
+    }
+
+    [Fact]
+    public async Task UseRobotsTxt_E2E_MostSpecificUserAgentMatch()
+    {
+        // Arrange: Test that most specific user-agent match takes precedence
+        var robotsContent = @"
+User-agent: TestBot
+Disallow: /testbot-blocked/
+
+User-agent: Test
+Disallow: /test-blocked/
+
+User-agent: *
+Disallow: /wildcard-blocked/
+Crawl-delay: 0.1";
+
+        SetupRobotsResponse("specific-test.com", robotsContent);
+        
+        SetupPageResponse("https://specific-test.com/", 
+            @"<html><body>
+                <h1>Home</h1>
+                <a href='/testbot-blocked/data.html'>TestBot Blocked</a>
+                <a href='/test-blocked/data.html'>Test Blocked</a>
+                <a href='/wildcard-blocked/data.html'>Wildcard Blocked</a>
+                <a href='/public/info.html'>Public</a>
+              </body></html>");
+        SetupPageResponse("https://specific-test.com/public/info.html", 
+            "<html><body><h1>Public Info</h1></body></html>");
+        SetupPageResponse("https://specific-test.com/testbot-blocked/data.html", 
+            "<html><body><h1>TestBot Blocked Data</h1></body></html>");
+        SetupPageResponse("https://specific-test.com/test-blocked/data.html", 
+            "<html><body><h1>Test Blocked Data</h1></body></html>");
+        SetupPageResponse("https://specific-test.com/wildcard-blocked/data.html", 
+            "<html><body><h1>Wildcard Blocked Data</h1></body></html>");
+
+        TestContext.Current = this;
+
+        // Act: Use "TestBot" which should match "TestBot" exactly (most specific)
+        var builder = Builder.CreateDefaultBuilder<SpecificTestSpider>(options =>
+        {
+            options.Speed = 1;
+            options.Depth = 2;
+        });
+        
+        builder.UseRobotsTxt();
+        
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        
+        await spider.RunAsync(cts.Token);
+
+        // Assert: Most specific match (TestBot) should take precedence
+        Assert.NotEmpty(_accessedUrls);
+        
+        // Should NOT access /testbot-blocked/ (blocked by TestBot-specific rules)
+        Assert.DoesNotContain(_accessedUrls, url => url.Contains("/testbot-blocked/"));
+        
+        // Should access /test-blocked/ (not blocked by TestBot rules, and TestBot takes precedence over Test)
+        Assert.Contains(_accessedUrls, url => url.Contains("/test-blocked/"));
+        
+        // Should access /wildcard-blocked/ (not blocked by TestBot rules, TestBot takes precedence over *)
+        Assert.Contains(_accessedUrls, url => url.Contains("/wildcard-blocked/"));
+        
+        // Should access /public/
+        Assert.Contains(_accessedUrls, url => url.Contains("/public/"));
+    }
+
     private void SetupRobotsResponse(string host, string content)
     {
         _httpMock.Protected()
@@ -446,6 +822,117 @@ Crawl-delay: 1.5";
     public void Dispose()
     {
         _httpClient?.Dispose();
+    }
+
+    /// <summary>
+    /// Test spider for Allow directive testing
+    /// </summary>
+    public class AllowTestSpider : Spider
+    {
+        public AllowTestSpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
+            : base(options, services, logger)
+        {
+        }
+
+        protected override async Task InitializeAsync(CancellationToken stoppingToken = default)
+        {
+            await AddRequestsAsync(new Request("https://allow-test.com/"));
+            AddDataFlow<TestDataParser>();
+        }
+    }
+
+    /// <summary>
+    /// Test spider for case-insensitive user-agent matching
+    /// </summary>
+    public class CaseTestSpider : Spider
+    {
+        public CaseTestSpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
+            : base(options, services, logger)
+        {
+        }
+
+        protected override async Task InitializeAsync(CancellationToken stoppingToken = default)
+        {
+            await AddRequestsAsync(new Request("https://case-test.com/")
+            {
+                Headers = { ["User-Agent"] = "TESTBOT" } // Uppercase to test case-insensitive matching
+            });
+            AddDataFlow<TestDataParser>();
+        }
+    }
+
+    /// <summary>
+    /// Test spider for prefix matching user-agent rules
+    /// </summary>
+    public class PrefixTestSpider : Spider
+    {
+        public PrefixTestSpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
+            : base(options, services, logger)
+        {
+        }
+
+        protected override async Task InitializeAsync(CancellationToken stoppingToken = default)
+        {
+            await AddRequestsAsync(new Request("https://prefix-test.com/")
+            {
+                Headers = { ["User-Agent"] = "TestBotAdvanced" } // Should match "Test" prefix
+            });
+            AddDataFlow<TestDataParser>();
+        }
+    }
+
+    /// <summary>
+    /// Test spider for missing robots.txt file handling
+    /// </summary>
+    public class MissingRobotsTestSpider : Spider
+    {
+        public MissingRobotsTestSpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
+            : base(options, services, logger)
+        {
+        }
+
+        protected override async Task InitializeAsync(CancellationToken stoppingToken = default)
+        {
+            await AddRequestsAsync(new Request("https://missing-robots.com/"));
+            AddDataFlow<TestDataParser>();
+        }
+    }
+
+    /// <summary>
+    /// Test spider for empty robots.txt file handling
+    /// </summary>
+    public class EmptyRobotsTestSpider : Spider
+    {
+        public EmptyRobotsTestSpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
+            : base(options, services, logger)
+        {
+        }
+
+        protected override async Task InitializeAsync(CancellationToken stoppingToken = default)
+        {
+            await AddRequestsAsync(new Request("https://empty-robots.com/"));
+            AddDataFlow<TestDataParser>();
+        }
+    }
+
+    /// <summary>
+    /// Test spider for most specific user-agent matching
+    /// </summary>
+    public class SpecificTestSpider : Spider
+    {
+        public SpecificTestSpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
+            : base(options, services, logger)
+        {
+        }
+
+        protected override async Task InitializeAsync(CancellationToken stoppingToken = default)
+        {
+            await AddRequestsAsync(new Request("https://specific-test.com/")
+            {
+                Headers = { ["User-Agent"] = "TestBot" } // Should match "TestBot" exactly (most specific)
+            });
+            AddDataFlow<TestDataParser>();
+        }
     }
 
     /// <summary>
@@ -531,16 +1018,51 @@ Crawl-delay: 1.5";
             if (context.Request.RequestUri.AbsolutePath == "/")
             {
                 string[] urlsToTest;
+                var host = context.Request.RequestUri.Host;
                 
-                urlsToTest = new[]
+                // Define URLs to test based on the host/test scenario
+                if (host.Contains("allow-test"))
                 {
-                    "/public/info.html",
-                    "/admin/info.html", 
-                    "/private/info.html",
-                    "/secret/info.html",
-                    "/public/info.pdf"
-                };
-                
+                    urlsToTest = new[]
+                    {
+                        "/public/info.html",
+                        "/private/secret.html",
+                        "/private/public-info/data.html"
+                    };
+                }
+                else if (host.Contains("case-test") || host.Contains("prefix-test") || host.Contains("specific-test"))
+                {
+                    urlsToTest = new[]
+                    {
+                        "/public/info.html",
+                        "/secret/data.html",
+                        "/admin/panel.html",
+                        "/testbot-blocked/data.html",
+                        "/test-blocked/data.html",
+                        "/wildcard-blocked/data.html"
+                    };
+                }
+                else if (host.Contains("missing-robots") || host.Contains("empty-robots"))
+                {
+                    urlsToTest = new[]
+                    {
+                        "/admin/panel.html",
+                        "/private/data.html",
+                        "/secret/info.html"
+                    };
+                }
+                else
+                {
+                    // Default test URLs for existing tests
+                    urlsToTest = new[]
+                    {
+                        "/public/info.html",
+                        "/admin/info.html", 
+                        "/private/info.html",
+                        "/secret/info.html",
+                        "/public/info.pdf"
+                    };
+                }
                 
                 foreach (var url in urlsToTest)
                 {
