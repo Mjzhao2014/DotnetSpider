@@ -25,12 +25,15 @@ public class AgentHostService : BackgroundService
     private readonly IHostApplicationLifetime _applicationLifetime;
     private readonly IStatisticService _statisticService;
     private readonly IServiceProvider _serviceProvider;
+    private readonly IHostThrottler _hostThrottler;
 
     public AgentHostService(IMessageQueue messageQueue,
         IOptions<AgentOptions> options,
         IHostApplicationLifetime applicationLifetime,
         ILoggerFactory loggerFactory,
-        IStatisticService statisticService, IServiceProvider serviceProvider)
+        IStatisticService statisticService,
+        IServiceProvider serviceProvider,
+        IHostThrottler hostThrottler)
     {
         _messageQueue = messageQueue;
         _applicationLifetime = applicationLifetime;
@@ -38,6 +41,7 @@ public class AgentHostService : BackgroundService
         _options = options;
         _logger = loggerFactory.CreateLogger(GetType());
         _serviceProvider = serviceProvider;
+        _hostThrottler = hostThrottler;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -134,17 +138,29 @@ public class AgentHostService : BackgroundService
                 break;
             }
             case Request request:
+            {
                 Task.Run(async () =>
                 {
+                    // acquire per-host slot to throttle request concurrency
+                    var host = request.RequestUri.Host;
+                    await _hostThrottler.AcquireAsync(host);
+                    var sw = System.Diagnostics.Stopwatch.StartNew();
                     var downloader = _serviceProvider.GetKeyedService<IDownloader>(request.Downloader);
                     var response = await downloader.DownloadAsync(request);
+                    sw.Stop();
                     if (response == null)
                     {
+                        _hostThrottler.Release(host, success: false, elapsedMs: (int)sw.ElapsedMilliseconds, statusCode: 0);
                         return;
                     }
 
-                    response.Agent = _options.Value.AgentId;
+                    // report outcome to throttle state before publishing response
+                    _hostThrottler.Release(host,
+                        response.StatusCode.IsSuccessStatusCode(),
+                        response.ElapsedMilliseconds > 0 ? response.ElapsedMilliseconds : (int)sw.ElapsedMilliseconds,
+                        (int)response.StatusCode);
 
+                    response.Agent = _options.Value.AgentId;
                     var topic = string.Format(Topics.Spider, request.Owner);
                     await _messageQueue.PublishAsBytesAsync(topic, response);
 
@@ -163,6 +179,7 @@ public class AgentHostService : BackgroundService
                     }
                 }).ConfigureAwait(false).GetAwaiter();
                 break;
+            }
             default:
             {
                 var msg = JsonSerializer.Serialize(message);

@@ -25,6 +25,8 @@ public static class ServiceCollectionExtensions
         services.AddDownloader<FakeHttpClientDownloader>();
         services.AddDownloader<PPPoEHttpClientDownloader>();
         services.TryAddSingleton<IProxyService, EmptyProxyService>();
+        // register adaptive throttling manager as singleton
+        services.TryAddSingleton<IHostThrottler, HostThrottler>();
         services.AddHostedService<AgentHostService>();
         return services;
     }
