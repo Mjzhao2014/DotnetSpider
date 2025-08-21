@@ -19,9 +19,10 @@ namespace DotnetSpider.Sample.samples;
 
 public class EntitySpider(
     IOptions<SpiderOptions> options,
+    IOptions<AdaptiveThrottleOptions> throttleOptions,
     DependenceServices services,
     ILogger<Spider> logger)
-    : Spider(options, services, logger)
+    : Spider(options, throttleOptions, services, logger)
 {
     public static async Task RunAsync()
     {

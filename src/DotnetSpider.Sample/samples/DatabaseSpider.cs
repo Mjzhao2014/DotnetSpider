@@ -13,9 +13,10 @@ namespace DotnetSpider.Sample.samples;
 
 public class DatabaseSpider(
     IOptions<SpiderOptions> options,
+    IOptions<AdaptiveThrottleOptions> throttleOptions,
     DependenceServices services,
     ILogger<Spider> logger)
-    : CnBlogsSpider(options, services, logger)
+    : CnBlogsSpider(options, throttleOptions, services, logger)
 {
     public static new async Task RunAsync()
     {

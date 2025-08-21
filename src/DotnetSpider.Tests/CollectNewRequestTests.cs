@@ -16,9 +16,10 @@ public class CollectNewRequestTests
 {
     public class TestSpider(
         IOptions<SpiderOptions> options,
+        IOptions<AdaptiveThrottleOptions> throttleOptions,
         DependenceServices services,
         ILogger<Spider> logger)
-        : Spider(options, services, logger)
+        : Spider(options, throttleOptions, services, logger)
     {
         public static readonly HashSet<string> CompletedUrls = [];
 

@@ -15,9 +15,10 @@ namespace DotnetSpider.Spiders;
 
 public class EntitySpider(
     IOptions<SpiderOptions> options,
+    IOptions<AdaptiveThrottleOptions> throttleOptions,
     DependenceServices services,
     ILogger<Spider> logger)
-    : Spider(options, services, logger)
+    : Spider(options, throttleOptions, services, logger)
 {
     protected override async Task InitializeAsync(CancellationToken stoppingToken = default)
     {

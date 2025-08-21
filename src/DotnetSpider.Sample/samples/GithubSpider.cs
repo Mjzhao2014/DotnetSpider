@@ -9,8 +9,11 @@ using Microsoft.Extensions.Options;
 
 namespace DotnetSpider.Sample.samples;
 
-public class GithubSpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
-    : Spider(options, services, logger)
+public class GithubSpider(IOptions<SpiderOptions> options,
+    IOptions<AdaptiveThrottleOptions> throttleOptions,
+    DependenceServices services,
+    ILogger<Spider> logger)
+    : Spider(options, throttleOptions, services, logger)
 {
     protected override async Task InitializeAsync(CancellationToken stoppingToken)
     {

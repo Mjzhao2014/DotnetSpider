@@ -13,8 +13,11 @@ using Serilog;
 
 namespace DotnetSpider.Sample.samples;
 
-public class JsonEntitySpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
-    : Spider(options, services, logger)
+public class JsonEntitySpider(IOptions<SpiderOptions> options,
+    IOptions<AdaptiveThrottleOptions> throttleOptions,
+    DependenceServices services,
+    ILogger<Spider> logger)
+    : Spider(options, throttleOptions, services, logger)
 {
     public static async Task RunAsync()
     {

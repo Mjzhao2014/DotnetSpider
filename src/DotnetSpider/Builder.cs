@@ -130,6 +130,8 @@ public class Builder : HostBuilder
         {
             var configuration = context.Configuration;
             services.Configure<SpiderOptions>(configuration);
+            // If adaptive throttle options are present in configuration, bind them.
+            services.Configure<AdaptiveThrottleOptions>(configuration);
 
             if (configureDelegate != null)
             {

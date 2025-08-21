@@ -15,9 +15,10 @@ namespace DotnetSpider.Sample.samples;
 [DisplayName(displayName: "博客园")]
 public class BaseUsageSpider(
     IOptions<SpiderOptions> options,
+    IOptions<AdaptiveThrottleOptions> throttleOptions,
     DependenceServices services,
     ILogger<Spider> logger)
-    : Spider(options, services, logger)
+    : Spider(options, throttleOptions, services, logger)
 {
     public static async Task RunAsync()
     {

@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.Collections.Concurrent;
 using System.ComponentModel;
 using System.Linq;
 using System.Reflection;
@@ -28,6 +29,10 @@ namespace DotnetSpider;
 public abstract class Spider :
     BackgroundService
 {
+    // Track per-host adaptive throttle state.
+    private readonly ConcurrentDictionary<string, HostGate> _hostGates = new();
+    // Local queues of pending requests to be dispatched per host.
+    private readonly ConcurrentDictionary<string, ConcurrentQueue<Request>> _hostQueues = new();
     private readonly FlowBuilder _flowBuilder;
     private readonly IList<IRequestSupplier> _requestSuppliers;
     private readonly RequestedQueue _requestedQueue;
@@ -68,13 +73,17 @@ public abstract class Spider :
     /// </summary>
     protected bool IsDistributed => _services.MessageQueue.IsDistributed;
 
+    private readonly AdaptiveThrottleOptions _throttleOptions;
+
     protected Spider(IOptions<SpiderOptions> options,
+        IOptions<AdaptiveThrottleOptions> throttleOptions,
         DependenceServices services,
         ILogger<Spider> logger
     )
     {
         Logger = logger;
         Options = options.Value;
+        _throttleOptions = throttleOptions?.Value ?? new AdaptiveThrottleOptions();
 
         if (Options.Speed > 500)
         {
@@ -288,41 +297,37 @@ public abstract class Spider :
                 }
                 case Response response:
                 {
-                    // 1. 从请求队列中去除请求
-                    // 2. 若是 timeout 的请求，无法通过 Dequeue 获取，会通过 _requestedQueue.GetAllTimeoutList() 获取得到
+                    // Remove from requested queue.
                     var request = _requestedQueue.Dequeue(response.RequestHash);
-
                     if (request != null)
                     {
+                        var host = request.RequestUri?.Host ?? string.Empty;
+                        var gate = _hostGates.GetOrAdd(host, _ => new HostGate(_throttleOptions));
                         if (response.StatusCode.IsSuccessStatusCode())
                         {
+                            gate.Release(true, response.ElapsedMilliseconds);
                             request.Agent = response.Agent;
-
                             if (IsDistributed)
                             {
                                 Logger.LogInformation(
                                     $"{SpiderId} download {request.RequestUri}, {request.Hash} via {request.Agent} success");
                             }
-
-                            // 是否下载成功由爬虫来决定，则非 Agent 自身
                             await _services.StatisticService.IncreaseAgentSuccessAsync(response.Agent,
                                 response.ElapsedMilliseconds);
                             await HandleResponseAsync(request, response, bytes);
                         }
                         else
                         {
+                            gate.Release(false, response.ElapsedMilliseconds);
                             await _services.StatisticService.IncreaseAgentFailureAsync(response.Agent,
                                 response.ElapsedMilliseconds);
                             Logger.LogError(
                                 $"{SpiderId} download {request.RequestUri}, {request.Hash} status code: {response.StatusCode} failed: {response.ReasonPhrase}");
-
                             request.RequestedTimes += 1;
                             await AddRequestsAsync(request);
-
                             OnRequestError?.Invoke(request, response);
                         }
                     }
-
                     break;
                 }
                 default:
@@ -396,7 +401,7 @@ public abstract class Spider :
         {
             var sleepTimeLimit = Options.EmptySleepTime * 1000;
 
-            var bucket = CreateBucket(Options.Speed);
+            // Global fixed token bucket has been replaced by per-host adaptive throttling.
             var sleepTime = 0;
             var batch = (int)Options.Batch;
             var start = DateTime.Now;
@@ -426,43 +431,62 @@ public abstract class Spider :
                     continue;
                 }
 
-                var requests = (await _services.Scheduler.DequeueAsync(batch)).ToArray();
-
-                if (requests.Length > 0)
+                var scheduled = (await _services.Scheduler.DequeueAsync(batch)).ToArray();
+                foreach (var req in scheduled)
                 {
-                    sleepTime = 0;
-
-                    foreach (var request in requests)
+                    ConfigureRequest(req);
+                    // 若是没有一个 Parser 可以处理此请求，则不需要下载
+                    // https://github.com/dotnetcore/DotnetSpider/issues/182
+                    if (!IsValidRequest(req))
                     {
-                        ConfigureRequest(request);
-
-                        // 若是没有一个 Parser 可以处理此请求，则不需要下载
-                        // https://github.com/dotnetcore/DotnetSpider/issues/182
-                        if (!IsValidRequest(request))
+                        continue;
+                    }
+                    var host = req.RequestUri?.Host ?? string.Empty;
+                    var queue = _hostQueues.GetOrAdd(host, _ => new ConcurrentQueue<Request>());
+                    queue.Enqueue(req);
+                }
+                var anyDispatched = false;
+                foreach (var kvp in _hostQueues)
+                {
+                    var host = kvp.Key;
+                    var queue = kvp.Value;
+                    if (!queue.TryPeek(out _))
+                    {
+                        continue;
+                    }
+                    var gate = _hostGates.GetOrAdd(host, _ => new HostGate(_throttleOptions));
+                    while (queue.TryPeek(out var req))
+                    {
+                        if (!gate.TryAcquire())
                         {
-                            continue;
+                            break;
                         }
-
-                        while (bucket.ShouldThrottle(1, out var waitTimeMillis))
-                        {
-                            await Task.Delay(waitTimeMillis, default(CancellationToken));
-                        }
-
+                        queue.TryDequeue(out var request);
                         if (!await PublishRequestMessagesAsync(request))
                         {
+                            gate.Release(false, 0);
                             Logger.LogError("Exit by publish request message failed");
                             break;
                         }
+                        anyDispatched = true;
                     }
-
+                    if (queue.IsEmpty)
+                    {
+                        _hostQueues.TryRemove(host, out _);
+                    }
+                }
+                if (anyDispatched)
+                {
+                    sleepTime = 0;
                     end = DateTime.Now;
                 }
                 else
                 {
-                    OnSchedulerEmpty?.Invoke();
-
+                    if (_hostQueues.IsEmpty && scheduled.Length == 0)
+                    {
+                        OnSchedulerEmpty?.Invoke();
+                    }
                     sleepTime += 10;
-
                     if (!await WaitForContinueAsync(sleepTime, sleepTimeLimit, (end - start).TotalSeconds))
                     {
                         break;
@@ -491,15 +515,15 @@ public abstract class Spider :
         foreach (var request in timeoutRequests)
         {
             request.RequestedTimes += 1;
-
             Logger.LogWarning(
                 $"{SpiderId} request {request.RequestUri}, {request.Hash} timeout");
+            // Treat timeout as error for adaptive throttle.
+            var host = request.RequestUri?.Host ?? string.Empty;
+            var gate = _hostGates.GetOrAdd(host, _ => new HostGate(_throttleOptions));
+            gate.Release(false, request.Timeout);
         }
-
         await AddRequestsAsync(timeoutRequests);
-
         OnRequestTimeout?.Invoke(timeoutRequests);
-
         return true;
     }
 
@@ -544,6 +568,7 @@ public abstract class Spider :
         _services.ApplicationLifetime.StopApplication();
     }
 
+    // FixedTokenBucket removed under adaptive throttling. Throttling occurs per-host.
     private static FixedTokenBucket CreateBucket(double speed)
     {
         if (speed >= 1)
