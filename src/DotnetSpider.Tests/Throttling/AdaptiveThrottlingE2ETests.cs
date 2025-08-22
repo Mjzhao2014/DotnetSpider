@@ -62,13 +62,40 @@ public class AdaptiveThrottlingE2ETests : IDisposable
     [Fact]
     public async Task E2E_PerHostStateManagement_IndependentHostBehavior()
     {
-        // Arrange: Create different host scenarios
-        var fastHostHandler = new E2ETestMessageHandler("fast.com", 
-            latencyMs: 50, errorRate: 0.0, statusCode: HttpStatusCode.OK);
-        var slowHostHandler = new E2ETestMessageHandler("slow.com", 
-            latencyMs: 800, errorRate: 0.1, statusCode: HttpStatusCode.OK);
-        var errorProneHandler = new E2ETestMessageHandler("error.com", 
-            latencyMs: 200, errorRate: 0.3, statusCode: HttpStatusCode.InternalServerError);
+        // Arrange: Create different host scenarios with proper page content
+        var fastHostHandler = new MockedWebsiteHandler("fast.com", new MockSiteConfig
+        {
+            LatencyMs = 50,
+            ErrorRate = 0.0,
+            StatusCode = HttpStatusCode.OK,
+            SiteName = "Fast News",
+            ContentTemplate = "<html><head><title>Fast News - {PAGE}</title></head>" +
+                            "<body><h1>Fast News Site</h1><p>This is {PAGE} with fast loading content.</p>" +
+                            "<nav><a href='/page{NEXT}'>Next Page</a></nav></body></html>"
+        });
+        
+        var slowHostHandler = new MockedWebsiteHandler("slow.com", new MockSiteConfig
+        {
+            LatencyMs = 800,
+            ErrorRate = 0.1,
+            StatusCode = HttpStatusCode.OK,
+            SiteName = "Slow CMS",
+            ContentTemplate = "<html><head><title>Slow CMS - {PAGE}</title></head>" +
+                            "<body><h1>Slow Content Management System</h1><p>Loading {PAGE} slowly...</p>" +
+                            "<div>Heavy content with lots of data processing...</div></body></html>"
+        });
+        
+        var errorProneHandler = new MockedWebsiteHandler("error.com", new MockSiteConfig
+        {
+            LatencyMs = 200,
+            ErrorRate = 0.3,
+            StatusCode = HttpStatusCode.OK, // Will be overridden by error rate
+            SiteName = "Unreliable Service",
+            ContentTemplate = "<html><head><title>Unreliable Service - {PAGE}</title></head>" +
+                            "<body><h1>Unreliable Service</h1><p>This service fails often for {PAGE}</p></body></html>",
+            ErrorContent = "<html><head><title>Service Error</title></head>" +
+                         "<body><h1>500 Internal Server Error</h1><p>Service temporarily unavailable</p></body></html>"
+        });
 
         var combinedHandler = new CompositeMessageHandler();
         combinedHandler.AddHandler("fast.com", fastHostHandler);
@@ -433,12 +460,55 @@ public class AdaptiveThrottlingE2ETests : IDisposable
     [Fact]
     public async Task E2E_MixedWorkload_RealisticCrawlingScenario()
     {
-        // Arrange: Multiple hosts with different characteristics
-        var newsHandler = new E2ETestMessageHandler("news.com", 120, 0.05, HttpStatusCode.OK);
-        var socialHandler = new E2ETestMessageHandler("social.com", 200, 0.1, HttpStatusCode.OK);
-        var apiHandler = new RateLimitedMessageHandler("api.service.com");
-        var cmsHandler = new E2ETestMessageHandler("slow-cms.com", 800, 0.15, HttpStatusCode.OK);
-        var unreliableHandler = new E2ETestMessageHandler("unreliable.com", 300, 0.3, HttpStatusCode.InternalServerError);
+        // Arrange: Multiple hosts with different characteristics and realistic content
+        var newsHandler = new MockedWebsiteHandler("news.com", new MockSiteConfig
+        {
+            LatencyMs = 120,
+            ErrorRate = 0.05,
+            StatusCode = HttpStatusCode.OK,
+            SiteName = "Fast News Network",
+            ContentTemplate = "<html><head><title>News - {PAGE}</title></head>" +
+                            "<body><h1>Breaking News</h1><article><h2>{PAGE}</h2>" +
+                            "<p>Latest news content here...</p></article>" +
+                            "<nav><a href='/page{NEXT}'>More News</a></nav></body></html>"
+        });
+        
+        var socialHandler = new MockedWebsiteHandler("social.com", new MockSiteConfig
+        {
+            LatencyMs = 200,
+            ErrorRate = 0.1,
+            StatusCode = HttpStatusCode.OK,
+            SiteName = "Social Network",
+            ContentTemplate = "<html><head><title>Social - {PAGE}</title></head>" +
+                            "<body><h1>Social Feed</h1><div class='posts'>{PAGE} posts...</div>" +
+                            "<script>loadMorePosts();</script></body></html>"
+        });
+        
+        var apiHandler = new RateLimitedApiHandler("api.service.com");
+        
+        var cmsHandler = new MockedWebsiteHandler("slow-cms.com", new MockSiteConfig
+        {
+            LatencyMs = 800,
+            ErrorRate = 0.15,
+            StatusCode = HttpStatusCode.OK,
+            SiteName = "Enterprise CMS",
+            ContentTemplate = "<html><head><title>CMS - {PAGE}</title></head>" +
+                            "<body><h1>Content Management</h1>" +
+                            "<div class='heavy-content'>{PAGE} with lots of server-side processing...</div>" +
+                            "<footer>Powered by Heavy CMS</footer></body></html>"
+        });
+        
+        var unreliableHandler = new MockedWebsiteHandler("unreliable.com", new MockSiteConfig
+        {
+            LatencyMs = 300,
+            ErrorRate = 0.3,
+            StatusCode = HttpStatusCode.OK,
+            SiteName = "Unreliable Service",
+            ContentTemplate = "<html><head><title>Unstable - {PAGE}</title></head>" +
+                            "<body><h1>Unstable Service</h1><p>This might work for {PAGE}...</p></body></html>",
+            ErrorContent = "<html><head><title>Service Down</title></head>" +
+                         "<body><h1>503 Service Unavailable</h1><p>Please try again later</p></body></html>"
+        });
 
         var compositeHandler = new CompositeMessageHandler();
         compositeHandler.AddHandler("news.com", newsHandler);
@@ -571,6 +641,125 @@ public class RequestInfo
     public bool Success { get; set; }
     public Exception Exception { get; set; }
     public TimeSpan Duration => EndTime - StartTime;
+}
+
+public class MockSiteConfig
+{
+    public int LatencyMs { get; set; } = 100;
+    public double ErrorRate { get; set; } = 0.0;
+    public HttpStatusCode StatusCode { get; set; } = HttpStatusCode.OK;
+    public string SiteName { get; set; } = "Mock Site";
+    public string ContentTemplate { get; set; } = "<html><body><h1>Mock Page</h1></body></html>";
+    public string ErrorContent { get; set; } = "<html><body><h1>Error</h1></body></html>";
+}
+
+public class MockedWebsiteHandler : HttpMessageHandler
+{
+    private readonly string _host;
+    private readonly MockSiteConfig _config;
+    private readonly Random _random = new();
+    private int _requestCount;
+    private readonly Dictionary<string, string> _pages = new();
+
+    public MockedWebsiteHandler(string host, MockSiteConfig config)
+    {
+        _host = host;
+        _config = config;
+        
+        // Pre-generate some realistic pages
+        GeneratePages();
+    }
+
+    private void GeneratePages()
+    {
+        // Generate home page
+        _pages["/"] = _config.ContentTemplate
+            .Replace("{PAGE}", "Home")
+            .Replace("{NEXT}", "1");
+            
+        // Generate numbered pages
+        for (int i = 0; i < 20; i++)
+        {
+            var pageName = $"page{i}";
+            var nextPage = i < 19 ? (i + 1).ToString() : "0";
+            
+            _pages[$"/{pageName}"] = _config.ContentTemplate
+                .Replace("{PAGE}", pageName)
+                .Replace("{NEXT}", nextPage);
+        }
+        
+        // Generate some category pages
+        var categories = new[] { "news", "sports", "tech", "business" };
+        foreach (var category in categories)
+        {
+            _pages[$"/{category}"] = _config.ContentTemplate
+                .Replace("{PAGE}", category.ToUpper())
+                .Replace("{NEXT}", "1");
+                
+            for (int i = 1; i <= 5; i++)
+            {
+                _pages[$"/{category}/article{i}"] = _config.ContentTemplate
+                    .Replace("{PAGE}", $"{category} Article {i}")
+                    .Replace("{NEXT}", (i + 1).ToString());
+            }
+        }
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _requestCount);
+        
+        // Simulate network latency with some variance
+        var actualLatency = _config.LatencyMs + _random.Next(-_config.LatencyMs / 4, _config.LatencyMs / 4);
+        await Task.Delay(Math.Max(10, actualLatency), cancellationToken);
+
+        // Simulate error rate
+        if (_random.NextDouble() < _config.ErrorRate)
+        {
+            return new HttpResponseMessage(HttpStatusCode.InternalServerError)
+            {
+                Content = new StringContent(_config.ErrorContent, System.Text.Encoding.UTF8, "text/html"),
+                Headers = { { "Server", $"{_config.SiteName}/1.0" } }
+            };
+        }
+
+        // Get the requested path
+        var path = request.RequestUri.PathAndQuery;
+        if (path.Contains('?'))
+        {
+            path = path.Substring(0, path.IndexOf('?'));
+        }
+
+        // Find matching page content
+        string content;
+        if (_pages.TryGetValue(path, out var pageContent))
+        {
+            content = pageContent;
+        }
+        else
+        {
+            // Generate a default page for unknown paths
+            content = _config.ContentTemplate
+                .Replace("{PAGE}", $"Page: {path}")
+                .Replace("{NEXT}", "1");
+        }
+
+        var response = new HttpResponseMessage(_config.StatusCode)
+        {
+            Content = new StringContent(content, System.Text.Encoding.UTF8, "text/html")
+        };
+        
+        // Add realistic headers
+        response.Headers.Add("Server", $"{_config.SiteName}/1.0");
+        response.Headers.Add("X-Request-ID", Guid.NewGuid().ToString("N")[..8]);
+        response.Headers.Add("X-Response-Time", $"{actualLatency}ms");
+        response.Headers.CacheControl = new System.Net.Http.Headers.CacheControlHeaderValue
+        {
+            MaxAge = TimeSpan.FromMinutes(5)
+        };
+
+        return response;
+    }
 }
 
 public class E2ETestMessageHandler : HttpMessageHandler
@@ -876,6 +1065,95 @@ public class RateLimitedMessageHandler : HttpMessageHandler
         return new HttpResponseMessage(HttpStatusCode.OK)
         {
             Content = new StringContent($"API response from {_host}")
+        };
+    }
+}
+
+public class RateLimitedApiHandler : HttpMessageHandler
+{
+    private readonly string _host;
+    private int _requestCount;
+    private DateTime _windowStart = DateTime.UtcNow;
+    private readonly Dictionary<string, object> _apiData = new();
+
+    public RateLimitedApiHandler(string host)
+    {
+        _host = host;
+        InitializeApiData();
+    }
+
+    private void InitializeApiData()
+    {
+        // Generate some realistic API responses
+        _apiData["/api/users"] = new { users = new[] { 
+            new { id = 1, name = "John Doe", email = "john@example.com" },
+            new { id = 2, name = "Jane Smith", email = "jane@example.com" }
+        }};
+        
+        _apiData["/api/posts"] = new { posts = new[] {
+            new { id = 1, title = "First Post", content = "Hello World" },
+            new { id = 2, title = "Second Post", content = "More content" }
+        }};
+        
+        _apiData["/api/status"] = new { status = "ok", version = "1.0", uptime = "99.9%" };
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        await Task.Delay(150, cancellationToken);
+
+        // Reset window every 10 seconds
+        var now = DateTime.UtcNow;
+        if (now - _windowStart > TimeSpan.FromSeconds(10))
+        {
+            _requestCount = 0;
+            _windowStart = now;
+        }
+
+        _requestCount++;
+
+        // Allow 5 requests per window, then rate limit
+        if (_requestCount > 5)
+        {
+            var rateLimitResponse = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+            {
+                Content = new StringContent(
+                    "{\"error\":\"Rate limit exceeded\",\"message\":\"Too many requests\"}",
+                    System.Text.Encoding.UTF8, "application/json")
+            };
+            rateLimitResponse.Headers.Add("Retry-After", "1");
+            rateLimitResponse.Headers.Add("X-RateLimit-Limit", "5");
+            rateLimitResponse.Headers.Add("X-RateLimit-Remaining", "0");
+            return rateLimitResponse;
+        }
+
+        // Get the requested path
+        var path = request.RequestUri.PathAndQuery;
+        if (path.Contains('?'))
+        {
+            path = path.Substring(0, path.IndexOf('?'));
+        }
+
+        // Return API data if available
+        if (_apiData.TryGetValue(path, out var data))
+        {
+            var jsonContent = System.Text.Json.JsonSerializer.Serialize(data);
+            var response = new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(jsonContent, System.Text.Encoding.UTF8, "application/json")
+            };
+            response.Headers.Add("X-API-Version", "1.0");
+            response.Headers.Add("X-RateLimit-Limit", "5");
+            response.Headers.Add("X-RateLimit-Remaining", (5 - _requestCount).ToString());
+            return response;
+        }
+
+        // Default API response
+        var defaultData = new { message = "API endpoint", path = path, timestamp = DateTime.UtcNow };
+        var defaultJson = System.Text.Json.JsonSerializer.Serialize(defaultData);
+        return new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(defaultJson, System.Text.Encoding.UTF8, "application/json")
         };
     }
 }
