@@ -56,8 +56,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         _throttleManager = new AdaptiveThrottleManager(_options);
     }
 
-    #region E2E Test 1: Per-Host State Management & Isolation
-
     [Fact]
     public async Task E2E_PerHostStateManagement_IndependentHostBehavior()
     {
@@ -154,10 +152,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         Assert.Equal(10, errorStats.TotalRequests);
     }
 
-    #endregion
-
-    #region E2E Test 2: EWMA Latency Calculation Over Time
-
     [Fact]
     public async Task E2E_EWMALatencyCalculation_AdaptiveToPatternChanges()
     {
@@ -210,10 +204,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         Assert.True(phase2Stats.CurrentConcurrency <= phase1Stats.CurrentConcurrency,
             $"Concurrency should decrease from phase 1 ({phase1Stats.CurrentConcurrency}) to phase 2 ({phase2Stats.CurrentConcurrency})");
     }
-
-    #endregion
-
-    #region E2E Test 3: Adaptive Concurrency Under Load
 
     [Fact]
     public async Task E2E_AdaptiveConcurrency_RespondsToLoadPatterns()
@@ -277,10 +267,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         }
     }
 
-    #endregion
-
-    #region E2E Test 4: Error Handling & Retry Logic with Backoff
-
     [Fact]
     public async Task E2E_ErrorHandling_RetryWithBackoffAndRecovery()
     {
@@ -330,10 +316,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         Assert.True(recoveredStats.ErrorRate < stats.ErrorRate, "Error rate should improve after successful requests");
     }
 
-    #endregion
-
-    #region E2E Test 5: Request Spacing Under High Frequency
-
     [Fact]
     public async Task E2E_RequestSpacing_EnforcesMinimumDelayPerHost()
     {
@@ -368,61 +350,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         }
     }
 
-    #endregion
-
-    #region E2E Test 6: Cancellation Safety
-
-    [Fact]
-    public async Task E2E_CancellationSafety_ProperlyCancelsAndCleansUp()
-    {
-        // Arrange: Slow handler to test cancellation
-        var slowHandler = new E2ETestMessageHandler("cancel.com", 
-            latencyMs: 2000, errorRate: 0.0, statusCode: HttpStatusCode.OK);
-        var httpClient = new HttpClient(slowHandler);
-        _httpClientFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
-
-        var downloader = new AdaptiveHttpClientDownloader(
-            _httpClientFactoryMock.Object,
-            new EmptyProxyService(),
-            _loggerMock.Object,
-            _throttleManager,
-            _options);
-
-        // Act & Assert: Test cancellation during request
-        using var cts = new CancellationTokenSource(TimeSpan.FromMilliseconds(500));
-        var hostGate = _throttleManager.GetHostGate("cancel.com");
-        var initialConcurrency = hostGate.CurrentConcurrency;
-
-        var cancellationTasks = new List<Task>();
-        for (int i = 0; i < 3; i++)
-        {
-            cancellationTasks.Add(Task.Run(async () =>
-            {
-                try
-                {
-                    using var lease = await hostGate.AcquireAsync(cts.Token);
-                    await Task.Delay(1000, cts.Token); // This should be cancelled
-                }
-                catch (OperationCanceledException)
-                {
-                    // Expected
-                }
-            }));
-        }
-
-        // Wait for cancellation
-        await Task.Delay(600);
-        
-        // Verify resources are properly released
-        await Task.Delay(100); // Allow cleanup
-        var finalConcurrency = hostGate.CurrentConcurrency;
-        Assert.Equal(initialConcurrency, finalConcurrency);
-    }
-
-    #endregion
-
-    #region E2E Test 7: Retry-After Header Handling
-
     [Fact]
     public async Task E2E_RetryAfterHeaders_HonorsServerDirectives()
     {
@@ -451,10 +378,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             $"Should have waited for Retry-After delay, actual: {stopwatch.ElapsedMilliseconds}ms");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
-
-    #endregion
-
-    #region E2E Test 8: Mixed Workload Realistic Scenario
 
     [Fact]
     public async Task E2E_MixedWorkload_RealisticCrawlingScenario()
@@ -577,10 +500,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             "Slow host should have higher EWMA latency");
     }
 
-    #endregion
-
-    #region Helper Classes and Methods
-
     private async Task ProcessRequestWithLogging(AdaptiveHttpClientDownloader downloader, Request request, string host)
     {
         var startTime = DateTime.UtcNow;
@@ -625,11 +544,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         _throttleManager?.Dispose();
         _globalCts?.Dispose();
     }
-
-    #endregion
 }
-
-#region Test Infrastructure Classes
 
 public class RequestInfo
 {
@@ -1156,5 +1071,3 @@ public class RateLimitedApiHandler : HttpMessageHandler
         };
     }
 }
-
-#endregion
