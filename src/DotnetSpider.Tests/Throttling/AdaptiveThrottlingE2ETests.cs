@@ -172,7 +172,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
 
         var downloader = new AdaptiveHttpClientDownloader(
             _httpClientFactoryMock.Object,
-            _proxyServiceMock.Object,
+            new EmptyProxyService(),
             _loggerMock.Object,
             _throttleManager,
             _options);
@@ -225,7 +225,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
 
         var downloader = new AdaptiveHttpClientDownloader(
             _httpClientFactoryMock.Object,
-            _proxyServiceMock.Object,
+            new EmptyProxyService(),
             _loggerMock.Object,
             _throttleManager,
             _options);
@@ -294,7 +294,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
 
         var downloader = new AdaptiveHttpClientDownloader(
             _httpClientFactoryMock.Object,
-            _proxyServiceMock.Object,
+            new EmptyProxyService(),
             _loggerMock.Object,
             _throttleManager,
             _options);
@@ -344,7 +344,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
 
         var downloader = new AdaptiveHttpClientDownloader(
             _httpClientFactoryMock.Object,
-            _proxyServiceMock.Object,
+            new EmptyProxyService(),
             _loggerMock.Object,
             _throttleManager,
             _options);
@@ -383,7 +383,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
 
         var downloader = new AdaptiveHttpClientDownloader(
             _httpClientFactoryMock.Object,
-            _proxyServiceMock.Object,
+            new EmptyProxyService(),
             _loggerMock.Object,
             _throttleManager,
             _options);
@@ -433,7 +433,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
 
         var downloader = new AdaptiveHttpClientDownloader(
             _httpClientFactoryMock.Object,
-            _proxyServiceMock.Object,
+            new EmptyProxyService(),
             _loggerMock.Object,
             _throttleManager,
             _options);
@@ -521,7 +521,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
 
         var downloader = new AdaptiveHttpClientDownloader(
             _httpClientFactoryMock.Object,
-            _proxyServiceMock.Object,
+            new EmptyProxyService(),
             _loggerMock.Object,
             _throttleManager,
             _options);
