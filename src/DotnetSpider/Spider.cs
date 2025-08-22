@@ -16,6 +16,7 @@ using DotnetSpider.Http;
 using DotnetSpider.Infrastructure;
 using DotnetSpider.MessageQueue;
 using DotnetSpider.RequestSupplier;
+using DotnetSpider.Robots;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -194,6 +195,12 @@ public abstract class Spider :
 
         var list = new List<Request>();
 
+        RobotsTxtManager robotsManager = null;
+        if (Options.UseRobotsTxt)
+        {
+            robotsManager = _services.ServiceProvider.GetService<RobotsTxtManager>();
+        }
+
         foreach (var request in requests)
         {
             if (string.IsNullOrWhiteSpace(request.Downloader))
@@ -224,6 +231,16 @@ public abstract class Spider :
             }
 
             request.Owner = SpiderId.Id;
+
+            // If robots.txt is enabled, ensure this request is allowed to be fetched.
+            if (robotsManager != null)
+            {
+                if (!await robotsManager.IsAllowedAsync(request))
+                {
+                    Logger.LogInformation("Skipping {RequestUri} due to robots.txt", request.RequestUri);
+                    continue;
+                }
+            }
 
             list.Add(request);
         }
@@ -562,8 +579,17 @@ public abstract class Spider :
     {
         if (requests.Length > 0)
         {
+            RobotsTxtManager robotsManager = null;
+            if (Options.UseRobotsTxt)
+            {
+                robotsManager = _services.ServiceProvider.GetService<RobotsTxtManager>();
+            }
             foreach (var request in requests)
             {
+                if (robotsManager != null)
+                {
+                    await robotsManager.EnforceDelayAsync(request);
+                }
                 // string topic;
                 // request.Timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
                 // if (string.IsNullOrWhiteSpace(request.Agent))
