@@ -54,7 +54,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             MaxRetryDelay = TimeSpan.FromSeconds(5)
         };
         _throttleManager = new AdaptiveThrottleManager(_options);
-        _proxyServiceMock.Setup(x => x.GetAsync(It.IsAny<int>())).ReturnsAsync((Uri)null);
     }
 
     #region E2E Test 1: Per-Host State Management & Isolation
@@ -107,7 +106,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
 
         var downloader = new AdaptiveHttpClientDownloader(
             _httpClientFactoryMock.Object,
-            _proxyServiceMock.Object,
+            new EmptyProxyService(),
             _loggerMock.Object,
             _throttleManager,
             _options);
