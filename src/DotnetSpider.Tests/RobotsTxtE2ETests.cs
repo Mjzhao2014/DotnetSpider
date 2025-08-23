@@ -853,6 +853,94 @@ Crawl-delay: 0.1";
         Assert.Contains(_accessedUrls, url => url.Contains("/public/"));
     }
 
+    [Fact]
+    public async Task UseRobotsTxt_E2E_MultipleUserAgentLinesInGroup()
+    {
+        // Arrange: Test that multiple User-agent lines in a single group work correctly
+        // According to robots.txt spec, multiple User-agent lines followed by directives
+        // means those directives apply to ALL listed user agents in that group
+        var robotsContent = @"
+User-agent: GoogleBot
+User-agent: BingBot  
+User-agent: TestBot
+Disallow: /shared-blocked/
+Allow: /shared-allowed/
+Crawl-delay: 1
+
+User-agent: FacebookBot
+User-agent: TwitterBot
+Disallow: /social-blocked/
+Disallow: /shared-blocked/
+
+User-agent: *
+Disallow: /wildcard-blocked/
+Crawl-delay: 0.5";
+
+        SetupRobotsResponse("multi-agent-test.com", robotsContent);
+        
+        SetupPageResponse("https://multi-agent-test.com/", 
+            @"<html><body>
+                <h1>Home</h1>
+                <a href='/shared-blocked/data.html'>Shared Blocked</a>
+                <a href='/shared-allowed/info.html'>Shared Allowed</a>
+                <a href='/social-blocked/data.html'>Social Blocked</a>
+                <a href='/wildcard-blocked/data.html'>Wildcard Blocked</a>
+                <a href='/public/info.html'>Public</a>
+              </body></html>");
+        SetupPageResponse("https://multi-agent-test.com/shared-blocked/data.html", 
+            "<html><body><h1>Shared Blocked Data</h1></body></html>");
+        SetupPageResponse("https://multi-agent-test.com/shared-allowed/info.html", 
+            "<html><body><h1>Shared Allowed Info</h1></body></html>");
+        SetupPageResponse("https://multi-agent-test.com/social-blocked/data.html", 
+            "<html><body><h1>Social Blocked Data</h1></body></html>");
+        SetupPageResponse("https://multi-agent-test.com/wildcard-blocked/data.html", 
+            "<html><body><h1>Wildcard Blocked Data</h1></body></html>");
+        SetupPageResponse("https://multi-agent-test.com/public/info.html", 
+            "<html><body><h1>Public Info</h1></body></html>");
+
+        TestContext.Current = this;
+
+        // Act: Use "TestBot" which is listed in the first group with GoogleBot and BingBot
+        var builder = Builder.CreateDefaultBuilder<MultiAgentTestSpider>(options =>
+        {
+            options.Speed = 5;
+            options.Depth = 2;
+        });
+        
+        builder.UseRobotsTxt();
+        
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        
+        await spider.RunAsync(cts.Token);
+
+        // Assert: TestBot should follow the rules from the first group (GoogleBot/BingBot/TestBot group)
+        Assert.NotEmpty(_accessedUrls);
+        
+        // Should NOT access /shared-blocked/ (blocked by first group rules)
+        Assert.DoesNotContain(_accessedUrls, url => url.Contains("/shared-blocked/"));
+        
+        // Should access /shared-allowed/ (explicitly allowed by first group rules)  
+        Assert.Contains(_accessedUrls, url => url.Contains("/shared-allowed/"));
+        
+        // Should access /social-blocked/ (not blocked by first group, only blocked for FacebookBot/TwitterBot group)
+        Assert.Contains(_accessedUrls, url => url.Contains("/social-blocked/"));
+        
+        // Should access /wildcard-blocked/ (first group takes precedence over wildcard rules)
+        Assert.Contains(_accessedUrls, url => url.Contains("/wildcard-blocked/"));
+        
+        // Should access /public/ (not blocked by any rules)
+        Assert.Contains(_accessedUrls, url => url.Contains("/public/"));
+
+       Assert.Equal(4, _accessedUrls.Count);
+    }
+
     private void SetupRobotsResponse(string host, string content)
     {
         _httpMock.Protected()
@@ -1000,6 +1088,26 @@ Crawl-delay: 0.1";
     }
 
     /// <summary>
+    /// Test spider for testing multiple User-agent lines in a single group
+    /// </summary>
+    public class MultiAgentTestSpider : Spider
+    {
+        public MultiAgentTestSpider(IOptions<SpiderOptions> options, DependenceServices services, ILogger<Spider> logger)
+            : base(options, services, logger)
+        {
+        }
+
+        protected override async Task InitializeAsync(CancellationToken stoppingToken = default)
+        {
+            await AddRequestsAsync(new Request("https://multi-agent-test.com/")
+            {
+                Headers = { ["User-Agent"] = "TestBot" } // Should match the first group (GoogleBot/BingBot/TestBot)
+            });
+            AddDataFlow<TestDataParser>();
+        }
+    }
+
+    /// <summary>
     /// Test spider for comprehensive robots.txt testing
     /// </summary>
     public class ComprehensiveTestSpider : Spider
@@ -1104,6 +1212,17 @@ Crawl-delay: 0.1";
                         "/testbot-blocked/data.html",
                         "/test-blocked/data.html",
                         "/wildcard-blocked/data.html"
+                    };
+                }
+                else if (host.Contains("multi-agent-test"))
+                {
+                    urlsToTest = new[]
+                    {
+                        "/shared-blocked/data.html",
+                        "/shared-allowed/info.html",
+                        "/social-blocked/data.html",
+                        "/wildcard-blocked/data.html",
+                        "/public/info.html"
                     };
                 }
                 else if (host.Contains("missing-robots") || host.Contains("empty-robots"))
