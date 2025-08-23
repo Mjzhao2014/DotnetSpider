@@ -45,8 +45,8 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             MaxRetryAttempts = 3,
             MinConcurrency = 1,
             MaxConcurrency = 8,
-            CooldownPeriod = TimeSpan.FromMilliseconds(100),
-            RequestSpacing = TimeSpan.FromMilliseconds(50),
+            CooldownPeriod = TimeSpan.FromMilliseconds(1000),
+            RequestSpacing = TimeSpan.FromMilliseconds(500),
             EwmaAlpha = 0.3,
             MinLatencyThresholdMs = 100,
             MaxLatencyThresholdMs = 1000,
@@ -345,7 +345,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         {
             var gap = timestamps[i] - timestamps[i - 1];
             // Allow some tolerance for test execution overhead
-            Assert.True(gap >= TimeSpan.FromMilliseconds(_options.RequestSpacing.TotalMilliseconds - 10),
+            Assert.True(gap >= TimeSpan.FromMilliseconds(_options.RequestSpacing.TotalMilliseconds - 100),
                 $"Request spacing should be at least {_options.RequestSpacing.TotalMilliseconds}ms, but was {gap.TotalMilliseconds}ms");
         }
     }
