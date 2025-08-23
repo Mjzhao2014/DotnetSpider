@@ -414,6 +414,70 @@ Crawl-delay: 1.5";
     }
 
     [Fact]
+    public async Task UseRobotsTxt_E2E_UserAgentSpecificRules_NoMatchedUserAgent()
+    {
+        // Arrange: Setup robots.txt with user-agent specific rules
+        // No specific rules for other agents
+        // the agent can access all pages
+        var robotsContent = @"
+User-agent: TestBot
+Disallow: /secret/
+Crawl-delay: 1";
+
+        SetupRobotsResponse("agent-test.com", robotsContent);
+
+        // Setup all pages that might be accessed
+        SetupPageResponse("https://agent-test.com/",
+            "<html><body><h1>Home</h1><a href='/secret/data.html'>Secret</a><a href='/admin/panel.html'>Admin</a><a href='/public/info.html'>Public</a></body></html>");
+        SetupPageResponse("https://agent-test.com/public/info.html",
+            "<html><body><h1>Public Info</h1></body></html>");
+        SetupPageResponse("https://agent-test.com/admin/info.html",
+            "<html><body><h1>Admin Panel</h1></body></html>");
+        SetupPageResponse("https://agent-test.com/secret/info.html",
+            "<html><body><h1>Secret Data</h1></body></html>");
+
+        TestContext.Current = this;
+
+        // Act: Create spider with default user agent (not TestBot) to test wildcard rules
+        var builder = Builder.CreateDefaultBuilder<OtherAgentTestSpider>(options =>
+        {
+            options.Speed = 10;
+            options.Depth = 2;
+        });
+
+        builder.UseRobotsTxt();
+
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+
+        await spider.RunAsync(cts.Token);
+
+        // Assert: Verify user-agent specific rules are respected
+        Assert.NotEmpty(_accessedUrls);
+
+        Assert.Equal(4, _accessedUrls.Count);
+
+        // Check what URLs were accessed
+        var secretAccessed = _accessedUrls.Any(url => url.Contains("/secret/"));
+        var adminAccessed = _accessedUrls.Any(url => url.Contains("/admin/"));
+        var publicAccessed = _accessedUrls.Any(url => url.Contains("/public/"));
+
+        // For agents other than TestBot, wildcard (*) rules apply:
+        // - Should access /secret/ (only TestBot is blocked from /secret/)
+        // - Should access /admin/ (wildcard * blocks all other agents from /admin/)
+        // - Should access /public/ (no restrictions)
+        Assert.True(secretAccessed);
+        Assert.True(adminAccessed);
+        Assert.True(publicAccessed);
+    }
+
+    [Fact]
     public async Task UseRobotsTxt_E2E_AllowOverridesDisallow()
     {
         // Arrange: Test Allow directive that overrides broader Disallow rules
