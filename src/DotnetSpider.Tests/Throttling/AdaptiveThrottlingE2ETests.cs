@@ -161,8 +161,10 @@ public class AdaptiveThrottlingE2ETests : IDisposable
 
         // Verify total requests were processed
         Assert.Equal(10, fastStats.TotalRequests);
-        Assert.Equal(10, slowStats.TotalRequests);
-        Assert.Equal(10, errorStats.TotalRequests);
+
+        // ErrorRate > 0, 10<=totalrequest <=13 
+        Assert.True(slowStats.TotalRequests >= 10 && slowStats.TotalRequests <= 10 + _options.MaxRetryAttempts);
+        Assert.True(errorStats.TotalRequests >= 10  && errorStats.TotalRequests <= 10 + _options.MaxRetryAttempts);
     }
 
     [Fact]
@@ -356,22 +358,14 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         var actualTimestamps = spacingHandler.GetRequestTimes();
         Assert.True(actualTimestamps.Count >= 6, "Should have recorded at least 6 request timestamps");
         
-        // Check spacing for requests 1-5 (skip the first gap as initialization might be different)
-        var validGaps = new List<double>();
-        for (int i = 2; i < Math.Min(actualTimestamps.Count, 6); i++) // Start from request 2
+        // Assert: Verify minimum spacing was enforced
+        for (int i = 1; i < actualTimestamps.Count; i++)
         {
             var gap = actualTimestamps[i] - actualTimestamps[i - 1];
-            validGaps.Add(gap.TotalMilliseconds);
+            // Allow some tolerance for test execution overhead
+            Assert.True(gap >= TimeSpan.FromMilliseconds(_options.RequestSpacing.TotalMilliseconds - 10),
+                $"Request spacing should be at least {_options.RequestSpacing.TotalMilliseconds}ms, but was {gap.TotalMilliseconds}ms");
         }
-
-        // Most gaps should be close to the expected spacing
-        var expectedSpacing = _options.RequestSpacing.TotalMilliseconds;
-        var gapsWithinTolerance = validGaps.Count(g => g >= (expectedSpacing - 25)); // 25ms tolerance
-        
-        Assert.True(gapsWithinTolerance >= validGaps.Count / 2, 
-            $"At least half of the request gaps should be properly spaced. " +
-            $"Expected ≥{expectedSpacing - 25}ms, got gaps: [{string.Join(", ", validGaps.Select(g => $"{g:F1}ms"))}]. " +
-            $"Only {gapsWithinTolerance}/{validGaps.Count} gaps were within tolerance.");
     }
 
     [Fact]
