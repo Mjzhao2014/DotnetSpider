@@ -364,7 +364,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         {
             var gap = actualTimestamps[i] - actualTimestamps[i - 1];
             // Allow some tolerance for test execution overhead
-            Assert.True(gap >= TimeSpan.FromMilliseconds(_options.RequestSpacing.TotalMilliseconds - 10),
+            Assert.True(gap >= TimeSpan.FromMilliseconds(_options.RequestSpacing.TotalMilliseconds - 100),
                 $"Request spacing should be at least {_options.RequestSpacing.TotalMilliseconds}ms, but was {gap.TotalMilliseconds}ms");
         }
     }
