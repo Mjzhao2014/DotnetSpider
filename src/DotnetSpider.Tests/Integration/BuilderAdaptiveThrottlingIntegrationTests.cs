@@ -14,6 +14,7 @@ using DotnetSpider.Http;
 using DotnetSpider.Infrastructure;
 using DotnetSpider.Proxy;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -297,7 +298,7 @@ public class BuilderAdaptiveThrottlingIntegrationTests : IDisposable
     {
         var builder = Builder.CreateBuilder<MinimalAdaptiveSpider>();
         
-        // Configure adaptive throttling manually until extension method exists
+        // Configure adaptive throttling manually
         builder.ConfigureServices(services =>
         {
             services.Configure<AdaptiveThrottleOptions>(options =>
@@ -309,8 +310,29 @@ public class BuilderAdaptiveThrottlingIntegrationTests : IDisposable
                 options.RequestSpacing = TimeSpan.FromMilliseconds(100);
             });
             
-            services.AddSingleton<AdaptiveThrottleManager>();
-            services.AddSingleton<IDownloader, AdaptiveHttpClientDownloader>();
+            services.AddSingleton<AdaptiveThrottleManager>(provider =>
+            {
+                var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                return new AdaptiveThrottleManager(options.Value);
+            });
+            
+            services.TryAddSingleton<IProxyService, EmptyProxyService>();
+            
+            services.AddSingleton<IDownloader>(provider =>
+            {
+                var httpClientFactory = provider.GetRequiredService<IHttpClientFactory>();
+                var proxyService = provider.GetRequiredService<IProxyService>();
+                var logger = provider.GetRequiredService<ILogger<AdaptiveHttpClientDownloader>>();
+                var throttleManager = provider.GetRequiredService<AdaptiveThrottleManager>();
+                var optionsValue = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                
+                return new AdaptiveHttpClientDownloader(
+                    httpClientFactory,
+                    proxyService, 
+                    logger,
+                    throttleManager,
+                    optionsValue.Value);
+            });
         });
 
         using var host = builder.Build();
@@ -350,7 +372,11 @@ public class BuilderAdaptiveThrottlingIntegrationTests : IDisposable
                 options.MaxRetryDelay = TimeSpan.FromSeconds(10);
             });
             
-            services.AddSingleton<AdaptiveThrottleManager>();
+            services.AddSingleton<AdaptiveThrottleManager>(provider =>
+            {
+                var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                return new AdaptiveThrottleManager(options.Value);
+            });
         });
 
         using var host = builder.Build();
@@ -540,8 +566,27 @@ public class BuilderAdaptiveThrottlingIntegrationTests : IDisposable
                 options.CooldownPeriod = TimeSpan.FromSeconds(3);
             });
             
-            services.AddSingleton<AdaptiveThrottleManager>();
-            services.AddSingleton<IDownloader, AdaptiveHttpClientDownloader>();
+            services.AddSingleton<AdaptiveThrottleManager>(provider =>
+            {
+                var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                return new AdaptiveThrottleManager(options.Value);
+            });
+            
+            services.AddSingleton<IDownloader>(provider =>
+            {
+                var httpClientFactory = provider.GetRequiredService<IHttpClientFactory>();
+                var proxyService = provider.GetRequiredService<IProxyService>();
+                var logger = provider.GetRequiredService<ILogger<AdaptiveHttpClientDownloader>>();
+                var throttleManager = provider.GetRequiredService<AdaptiveThrottleManager>();
+                var optionsValue = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                
+                return new AdaptiveHttpClientDownloader(
+                    httpClientFactory,
+                    proxyService, 
+                    logger,
+                    throttleManager,
+                    optionsValue.Value);
+            });
         });
 
         using var host = builder.Build();
@@ -636,10 +681,31 @@ public class BuilderAdaptiveThrottlingIntegrationTests : IDisposable
                 options.ProxySupplierUrl = "http://test-proxy-supplier.com";
             });
             
-            services.AddSingleton<AdaptiveThrottleManager>();
+            services.AddSingleton<AdaptiveThrottleManager>(provider =>
+            {
+                var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                return new AdaptiveThrottleManager(options.Value);
+            });
+            
             services.AddSingleton<IProxySupplier, EmptyProxySupplier>();
             services.AddSingleton<IProxyValidator, DefaultProxyValidator>();
-            services.AddSingleton<IDownloader, AdaptiveHttpClientDownloader>();
+            services.TryAddSingleton<IProxyService, EmptyProxyService>();
+            
+            services.AddSingleton<IDownloader>(provider =>
+            {
+                var httpClientFactory = provider.GetRequiredService<IHttpClientFactory>();
+                var proxyService = provider.GetRequiredService<IProxyService>();
+                var logger = provider.GetRequiredService<ILogger<AdaptiveHttpClientDownloader>>();
+                var throttleManager = provider.GetRequiredService<AdaptiveThrottleManager>();
+                var optionsValue = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                
+                return new AdaptiveHttpClientDownloader(
+                    httpClientFactory,
+                    proxyService, 
+                    logger,
+                    throttleManager,
+                    optionsValue.Value);
+            });
         });
 
         using var host = builder.Build();

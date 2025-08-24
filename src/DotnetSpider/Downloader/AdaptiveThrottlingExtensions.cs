@@ -1,7 +1,12 @@
 using System;
+using System.Net.Http;
 using DotnetSpider.Downloader;
+using DotnetSpider.Proxy;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
 
 namespace DotnetSpider.Downloader;
 
@@ -26,9 +31,31 @@ public static class AdaptiveThrottlingExtensions
                 services.Configure(configure);
             }
 
-            // Register adaptive throttling services
-            services.AddSingleton<AdaptiveThrottleManager>();
-            services.AddSingleton<IDownloader, AdaptiveHttpClientDownloader>();
+            // Register proxy service if not already registered
+            services.TryAddSingleton<IProxyService, EmptyProxyService>();
+
+            // Register adaptive throttling services with factory to provide unwrapped options
+            services.AddSingleton<AdaptiveThrottleManager>(provider =>
+            {
+                var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                return new AdaptiveThrottleManager(options.Value);
+            });
+            
+            services.AddSingleton<IDownloader>(provider =>
+            {
+                var httpClientFactory = provider.GetRequiredService<IHttpClientFactory>();
+                var proxyService = provider.GetRequiredService<IProxyService>();
+                var logger = provider.GetRequiredService<ILogger<AdaptiveHttpClientDownloader>>();
+                var throttleManager = provider.GetRequiredService<AdaptiveThrottleManager>();
+                var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                
+                return new AdaptiveHttpClientDownloader(
+                    httpClientFactory,
+                    proxyService, 
+                    logger,
+                    throttleManager,
+                    options.Value);
+            });
         });
 
         return builder;
@@ -47,9 +74,31 @@ public static class AdaptiveThrottlingExtensions
             // Configure adaptive throttle options with context
             services.Configure<AdaptiveThrottleOptions>(options => configure(context, options));
 
-            // Register adaptive throttling services
-            services.AddSingleton<AdaptiveThrottleManager>();
-            services.AddSingleton<IDownloader, AdaptiveHttpClientDownloader>();
+            // Register proxy service if not already registered
+            services.TryAddSingleton<IProxyService, EmptyProxyService>();
+
+            // Register adaptive throttling services with factory to provide unwrapped options
+            services.AddSingleton<AdaptiveThrottleManager>(provider =>
+            {
+                var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                return new AdaptiveThrottleManager(options.Value);
+            });
+            
+            services.AddSingleton<IDownloader>(provider =>
+            {
+                var httpClientFactory = provider.GetRequiredService<IHttpClientFactory>();
+                var proxyService = provider.GetRequiredService<IProxyService>();
+                var logger = provider.GetRequiredService<ILogger<AdaptiveHttpClientDownloader>>();
+                var throttleManager = provider.GetRequiredService<AdaptiveThrottleManager>();
+                var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+                
+                return new AdaptiveHttpClientDownloader(
+                    httpClientFactory,
+                    proxyService, 
+                    logger,
+                    throttleManager,
+                    options.Value);
+            });
         });
 
         return builder;
@@ -68,8 +117,30 @@ public static class AdaptiveThrottlingExtensions
             services.Configure(configure);
         }
 
-        services.AddSingleton<AdaptiveThrottleManager>();
-        services.AddSingleton<IDownloader, AdaptiveHttpClientDownloader>();
+        // Register proxy service if not already registered
+        services.TryAddSingleton<IProxyService, EmptyProxyService>();
+
+        services.AddSingleton<AdaptiveThrottleManager>(provider =>
+        {
+            var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+            return new AdaptiveThrottleManager(options.Value);
+        });
+        
+        services.AddSingleton<IDownloader>(provider =>
+        {
+            var httpClientFactory = provider.GetRequiredService<IHttpClientFactory>();
+            var proxyService = provider.GetRequiredService<IProxyService>();
+            var logger = provider.GetRequiredService<ILogger<AdaptiveHttpClientDownloader>>();
+            var throttleManager = provider.GetRequiredService<AdaptiveThrottleManager>();
+            var options = provider.GetRequiredService<IOptions<AdaptiveThrottleOptions>>();
+            
+            return new AdaptiveHttpClientDownloader(
+                httpClientFactory,
+                proxyService, 
+                logger,
+                throttleManager,
+                options.Value);
+        });
 
         return services;
     }
