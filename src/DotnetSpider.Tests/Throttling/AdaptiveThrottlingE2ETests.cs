@@ -372,7 +372,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
     [Fact]
     public async Task E2E_RetryAfterHeaders_HonorsServerDirectives()
     {
-        // Arrange: Handler that sends Retry-After headers
+        // Arrange: Handler that sends Retry-After headers.
         var retryAfterHandler = new RetryAfterMessageHandler("retry.com");
         var httpClient = new HttpClient(retryAfterHandler);
         _httpClientFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
@@ -393,7 +393,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         stopwatch.Stop();
 
         // Assert: Should have honored the Retry-After delay
-        Assert.True(stopwatch.ElapsedMilliseconds >= 1900, // 2 seconds minus some tolerance
+        Assert.True(stopwatch.ElapsedMilliseconds >= 9900, // 10 seconds minus some tolerance
             $"Should have waited for Retry-After delay, actual: {stopwatch.ElapsedMilliseconds}ms");
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
     }
@@ -1002,7 +1002,7 @@ public class RetryAfterMessageHandler : HttpMessageHandler
             {
                 Content = new StringContent("Rate limited")
             };
-            response.Headers.Add("Retry-After", "2"); // 2 seconds
+            response.Headers.Add("Retry-After", "10"); // 10 seconds
             return response;
         }
 
