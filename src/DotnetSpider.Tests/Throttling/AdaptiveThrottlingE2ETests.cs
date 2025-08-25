@@ -335,7 +335,19 @@ public class AdaptiveThrottlingE2ETests : IDisposable
     [Fact]
     public async Task E2E_RequestSpacing_EnforcesMinimumDelayPerHost()
     {
-        // Arrange: Fast handler to test spacing enforcement
+        // Arrange: Configure with specific spacing and higher concurrency to expose race condition
+        var spacingOptions = new AdaptiveThrottleOptions
+        {
+            EnableAdaptiveThrottling = true,
+            MinConcurrency = 3,
+            MaxConcurrency = 5, // Allow multiple concurrent requests
+            RequestSpacing = TimeSpan.FromMilliseconds(200), // Require 200ms spacing
+            EwmaAlpha = 0.3,
+            MaxRetryAttempts = 1
+        };
+        var spacingManager = new AdaptiveThrottleManager(spacingOptions);
+
+        // Use a fast handler that responds quickly to highlight spacing violations
         var spacingHandler = new TimestampTrackingMessageHandler("spacing.com");
         var httpClient = new HttpClient(spacingHandler);
         _httpClientFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
@@ -344,29 +356,187 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             _httpClientFactoryMock.Object,
             new EmptyProxyService(),
             _loggerMock.Object,
-            _throttleManager,
-            _options);
+            spacingManager,
+            spacingOptions);
 
-        // Act: Send requests with slight delay to allow proper initialization
-        var testStartTime = DateTime.UtcNow;
-        for (int i = 0; i < 6; i++) // Use 6 requests to get better statistics
+        // Act: Send concurrent requests that should trigger the race condition
+        var tasks = new List<Task>();
+        var requestCount = 10;
+        
+        // Launch all requests concurrently to maximize race condition potential
+        for (int i = 0; i < requestCount; i++)
         {
-            var request = new Request($"https://spacing.com/rapid{i}");
-            await downloader.DownloadAsync(request);
+            var request = new Request($"https://spacing.com/concurrent{i}");
+            tasks.Add(Task.Run(async () => await downloader.DownloadAsync(request)));
         }
 
-        // Assert: Verify minimum spacing was enforced
+        var startTime = DateTime.UtcNow;
+        await Task.WhenAll(tasks);
+        var endTime = DateTime.UtcNow;
+
+        // Assert: Verify minimum spacing was enforced under concurrent conditions
         var actualTimestamps = spacingHandler.GetRequestTimes();
-        Assert.True(actualTimestamps.Count >= 6, "Should have recorded at least 6 request timestamps");
+        Assert.True(actualTimestamps.Count >= requestCount, 
+            $"Should have recorded at least {requestCount} request timestamps, got {actualTimestamps.Count}");
+
+        // Sort timestamps to check spacing in chronological order
+        actualTimestamps.Sort();
+
+        // Check that minimum spacing is enforced between consecutive requests
+        var violations = new List<string>();
+        var minSpacingMs = spacingOptions.RequestSpacing.TotalMilliseconds;
         
-        // Assert: Verify minimum spacing was enforced
         for (int i = 1; i < actualTimestamps.Count; i++)
         {
             var gap = actualTimestamps[i] - actualTimestamps[i - 1];
-            // Allow some tolerance for test execution overhead
-            Assert.True(gap >= TimeSpan.FromMilliseconds(_options.RequestSpacing.TotalMilliseconds - 100),
-                $"Request spacing should be at least {_options.RequestSpacing.TotalMilliseconds}ms, but was {gap.TotalMilliseconds}ms");
+            var gapMs = gap.TotalMilliseconds;
+            
+            // Allow for some measurement precision but be strict about the spacing
+            // If gap is less than 90% of required spacing, it's a clear violation
+            if (gapMs < minSpacingMs * 0.9)
+            {
+                violations.Add($"Gap {i}: {gapMs:F1}ms (required: {minSpacingMs}ms)");
+            }
         }
+
+        Assert.True(violations.Count == 0, 
+            $"Request spacing violations detected in concurrent execution:\n{string.Join("\n", violations)}\n" +
+            $"This indicates a race condition in HostGate._lastRequestTime handling.\n" +
+            $"Total requests: {actualTimestamps.Count}, Violations: {violations.Count}");
+
+        // Additional verification: Total execution time should reflect spacing constraints
+        var expectedMinDuration = TimeSpan.FromMilliseconds((requestCount - 1) * minSpacingMs * 0.8); // 80% of theoretical minimum
+        var actualDuration = endTime - startTime;
+        
+        Assert.True(actualDuration >= expectedMinDuration,
+            $"Total execution time ({actualDuration.TotalMilliseconds:F0}ms) should reflect spacing constraints " +
+            $"(expected minimum: {expectedMinDuration.TotalMilliseconds:F0}ms)");
+
+        spacingManager.Dispose();
+    }
+
+    [Fact]
+    public async Task E2E_RequestSpacing_ConcurrencyVsSpacing_RaceConditionDetection()
+    {
+        // Arrange: This test specifically targets the race condition by maximizing concurrency
+        var raceTestOptions = new AdaptiveThrottleOptions
+        {
+            EnableAdaptiveThrottling = true,
+            MinConcurrency = 4,
+            MaxConcurrency = 6,
+            RequestSpacing = TimeSpan.FromMilliseconds(300), // Significant spacing requirement
+            EwmaAlpha = 0.5,
+            MaxRetryAttempts = 1,
+            CooldownPeriod = TimeSpan.FromMilliseconds(50)
+        };
+        var raceManager = new AdaptiveThrottleManager(raceTestOptions);
+
+        // Use extremely fast handler to eliminate network delay as a factor
+        var raceHandler = new MockedWebsiteHandler("race-test.com", new MockSiteConfig
+        {
+            LatencyMs = 1, // Almost instant response
+            ErrorRate = 0.0,
+            StatusCode = HttpStatusCode.OK
+        });
+
+        var httpClient = new HttpClient(raceHandler);
+        _httpClientFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
+
+        var downloader = new AdaptiveHttpClientDownloader(
+            _httpClientFactoryMock.Object,
+            new EmptyProxyService(),
+            _loggerMock.Object,
+            raceManager,
+            raceTestOptions);
+
+        // Act: Launch many concurrent requests simultaneously
+        var tasks = new List<Task<DateTime>>();
+        var requestCount = 15;
+        var barrier = new Barrier(requestCount + 1); // +1 for this thread
+
+        for (int i = 0; i < requestCount; i++)
+        {
+            int requestId = i;
+            tasks.Add(Task.Run(async () =>
+            {
+                // Wait for all tasks to be ready, then launch simultaneously
+                barrier.SignalAndWait();
+                
+                
+                var request = new Request($"https://race-test.com/simultaneous{requestId}");
+                await downloader.DownloadAsync(request);
+                var requestCompleteTime = DateTime.UtcNow;
+                return requestCompleteTime;
+            }));
+        }
+
+        // Signal all tasks to start simultaneously
+        barrier.SignalAndWait();
+        
+        var requestCompleteTimes = await Task.WhenAll(tasks);
+        await Task.Delay(100); // Let everything settle
+
+        // Assert: Analyze the timing pattern for race condition evidence
+        var sortedCompleteTimes = requestCompleteTimes.OrderBy(t => t).ToArray();
+        var stats = downloader.GetHostStats("race-test.com");
+        
+        // Look for clusters of near-simultaneous requests (evidence of race condition)
+        var simultaneousGroups = new List<List<DateTime>>();
+        var currentGroup = new List<DateTime> { sortedCompleteTimes[0] };
+        
+        for (int i = 1; i < sortedCompleteTimes.Length; i++)
+        {
+            var gap = sortedCompleteTimes[i] - sortedCompleteTimes[i - 1];
+            
+            if (gap.TotalMilliseconds < 50) // Within 50ms = essentially simultaneous
+            {
+                currentGroup.Add(sortedCompleteTimes[i]);
+            }
+            else
+            {
+                if (currentGroup.Count > 1)
+                    simultaneousGroups.Add(currentGroup);
+                currentGroup = new List<DateTime> { sortedCompleteTimes[i] };
+            }
+        }
+        if (currentGroup.Count > 1)
+            simultaneousGroups.Add(currentGroup);
+
+        // If we have groups of simultaneous requests, it indicates the race condition
+        var raceConditionDetected = simultaneousGroups.Any(g => g.Count >= 3);
+        
+        if (raceConditionDetected)
+        {
+            var evidence = string.Join("; ", simultaneousGroups
+                .Where(g => g.Count >= 3)
+                .Select(g => $"{g.Count} requests within {(g.Last() - g.First()).TotalMilliseconds:F1}ms"));
+                
+            Assert.Fail(
+                $"RACE CONDITION DETECTED: Multiple requests started simultaneously despite {raceTestOptions.RequestSpacing.TotalMilliseconds}ms spacing requirement.\n" +
+                $"Evidence: {evidence}\n" +
+                $"This confirms unsynchronized access to _lastRequestTime in HostGate.WaitForSpacingAsync.\n" +
+                $"Total requests: {requestCount}, Processed: {stats.TotalRequests}");
+        }
+
+        // If no race condition detected, the implementation might have been fixed or test conditions weren't sufficient
+        // In either case, verify that spacing was properly enforced
+        var minRequiredSpacing = raceTestOptions.RequestSpacing.TotalMilliseconds * 0.8;
+        var spacingViolations = 0;
+        
+        for (int i = 1; i < sortedCompleteTimes.Length; i++)
+        {
+            var gap = sortedCompleteTimes[i] - sortedCompleteTimes[i - 1];
+            if (gap.TotalMilliseconds < minRequiredSpacing)
+            {
+                spacingViolations++;
+            }
+        }
+
+        Assert.True(spacingViolations == 0, 
+            $"Found {spacingViolations} spacing violations out of {requestCount - 1} gaps. " +
+            $"Required spacing: {raceTestOptions.RequestSpacing.TotalMilliseconds}ms");
+
+        raceManager.Dispose();
     }
 
     [Fact]
