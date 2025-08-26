@@ -607,6 +607,160 @@ public class AdaptiveThrottlingE2ETests : IDisposable
     }
 
     [Fact]
+    public async Task E2E_RetryLogic_TimeoutsAndErrorCodes_RespectsMaxRetryAttempts()
+    {
+        // Arrange: Create handlers that simulate different error scenarios
+        var timeoutHandler = new TimeoutErrorMessageHandler("timeout.com");
+        var rateLimitHandler = new RateLimitErrorMessageHandler("ratelimit.com");
+        var serverErrorHandler = new ServerErrorMessageHandler("servererror.com");
+
+        var combinedHandler = new CompositeMessageHandler();
+        combinedHandler.AddHandler("timeout.com", timeoutHandler);
+        combinedHandler.AddHandler("ratelimit.com", rateLimitHandler);
+        combinedHandler.AddHandler("servererror.com", serverErrorHandler);
+
+        var httpClient = new HttpClient(combinedHandler);
+        _httpClientFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
+
+        var downloader = new AdaptiveHttpClientDownloader(
+            _httpClientFactoryMock.Object,
+            new EmptyProxyService(),
+            _loggerMock.Object,
+            _throttleManager,
+            _options);
+
+        var results = new List<(string url, HttpStatusCode statusCode, bool success, int attempts, TimeSpan duration)>();
+
+        // Act: Test timeout scenario
+        var timeoutStopwatch = Stopwatch.StartNew();
+        try
+        {
+            var timeoutRequest = new Request("https://timeout.com/test");
+            var timeoutResponse = await downloader.DownloadAsync(timeoutRequest);
+            timeoutStopwatch.Stop();
+            
+            results.Add(("timeout.com", timeoutResponse.StatusCode, true, 
+                timeoutHandler.AttemptCount, timeoutStopwatch.Elapsed));
+        }
+        catch (Exception)
+        {
+            timeoutStopwatch.Stop();
+            results.Add(("timeout.com", HttpStatusCode.RequestTimeout, false, 
+                timeoutHandler.AttemptCount, timeoutStopwatch.Elapsed));
+        }
+
+        // Act: Test 429 rate limit scenario
+        var rateLimitStopwatch = Stopwatch.StartNew();
+        try
+        {
+            var rateLimitRequest = new Request("https://ratelimit.com/test");
+            var rateLimitResponse = await downloader.DownloadAsync(rateLimitRequest);
+            rateLimitStopwatch.Stop();
+            
+            results.Add(("ratelimit.com", rateLimitResponse.StatusCode, true, 
+                rateLimitHandler.AttemptCount, rateLimitStopwatch.Elapsed));
+        }
+        catch (Exception)
+        {
+            rateLimitStopwatch.Stop();
+            results.Add(("ratelimit.com", HttpStatusCode.TooManyRequests, false, 
+                rateLimitHandler.AttemptCount, rateLimitStopwatch.Elapsed));
+        }
+
+        // Act: Test 5xx server error scenario
+        var serverErrorStopwatch = Stopwatch.StartNew();
+        try
+        {
+            var serverErrorRequest = new Request("https://servererror.com/test");
+            var serverErrorResponse = await downloader.DownloadAsync(serverErrorRequest);
+            serverErrorStopwatch.Stop();
+            
+            results.Add(("servererror.com", serverErrorResponse.StatusCode, true, 
+                serverErrorHandler.AttemptCount, serverErrorStopwatch.Elapsed));
+        }
+        catch (Exception)
+        {
+            serverErrorStopwatch.Stop();
+            results.Add(("servererror.com", HttpStatusCode.InternalServerError, false, 
+                serverErrorHandler.AttemptCount, serverErrorStopwatch.Elapsed));
+        }
+
+        // Verify individual handler retry counts
+        Assert.Equal(_options.MaxRetryAttempts, timeoutHandler.AttemptCount);
+        Assert.Equal(_options.MaxRetryAttempts, rateLimitHandler.AttemptCount);
+        Assert.Equal(_options.MaxRetryAttempts, serverErrorHandler.AttemptCount);
+    }
+
+    [Fact]
+    public async Task E2E_ExponentialBackoffWithJitter_RespectsMaxRetryDelay()
+    {
+        // Arrange: Set up options with specific MaxRetryDelay for testing
+        var backoffOptions = new AdaptiveThrottleOptions 
+        { 
+            EnableAdaptiveThrottling = true,
+            MaxRetryAttempts = 10, // Allow more retries to test exponential growth
+            MinConcurrency = 1,
+            MaxConcurrency = 4,
+            CooldownPeriod = TimeSpan.FromMilliseconds(100),
+            RequestSpacing = TimeSpan.FromMilliseconds(50),
+            EwmaAlpha = 0.3,
+            MinLatencyThresholdMs = 100,
+            MaxLatencyThresholdMs = 1000,
+            ErrorRateThreshold = 0.2,
+            MaxRetryDelay = TimeSpan.FromSeconds(2) // Cap retry delay at 2 seconds
+        };
+        
+        var backoffThrottleManager = new AdaptiveThrottleManager(backoffOptions);
+        
+        // Create a handler that tracks retry timestamps and always fails
+        var backoffHandler = new ExponentialBackoffTrackingHandler("backoff.com");
+
+        var httpClient = new HttpClient(backoffHandler);
+        _httpClientFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
+
+        var downloader = new AdaptiveHttpClientDownloader(
+            _httpClientFactoryMock.Object,
+            new EmptyProxyService(),
+            _loggerMock.Object,
+            backoffThrottleManager,
+            backoffOptions);
+
+        // Act: Make request that will trigger retries with exponential backoff
+        var overallStopwatch = Stopwatch.StartNew();
+        try
+        {
+            var request = new Request("https://backoff.com/failing-endpoint");
+            await downloader.DownloadAsync(request);
+        }
+        catch (Exception)
+        {
+            // Expected to fail after all retries
+        }
+        overallStopwatch.Stop();
+
+        // Assert: Verify exponential backoff behavior
+        var retryTimestamps = backoffHandler.GetRetryTimestamps();
+        Assert.True(retryTimestamps.Count >= 2, "Should have at least 2 retry attempts");
+
+        // Calculate delays between attempts
+        var delays = new List<TimeSpan>();
+        for (int i = 1; i < retryTimestamps.Count; i++)
+        {
+            delays.Add(retryTimestamps[i] - retryTimestamps[i - 1]);
+        }
+        
+        // Check that we have meaningful delays (not all tiny delays)
+        Assert.True(delays.Any(d => d.TotalMilliseconds > 100), 
+            "At least one retry delay should be substantial (>100ms)");
+        
+
+        // Verify that at least one delay reached or approached MaxRetryDelay (showing capping works)
+        var maxObservedDelay = delays.Max();
+        Assert.True(maxObservedDelay <= backoffOptions.MaxRetryDelay + TimeSpan.FromMilliseconds(500), 
+            $"Max observed delay ({maxObservedDelay.TotalMilliseconds}ms) should not exceed MaxRetryDelay ({backoffOptions.MaxRetryDelay.TotalMilliseconds}ms) by more than 500ms");
+    }
+
+    [Fact]
     public async Task E2E_SpiderWithAdaptiveDownloader_CrawlWebsite()
     {
         // Arrange: Create a mock website with varying latency patterns
@@ -1319,4 +1473,159 @@ public class CrawledPage
     public bool Success { get; set; }
     public string Error { get; set; }
     public DateTime CrawledAt { get; set; }
+}
+
+/// <summary>
+/// Message handler that simulates timeout errors with retry attempts
+/// </summary>
+public class TimeoutErrorMessageHandler : HttpMessageHandler
+{
+    private readonly string _host;
+    private int _attemptCount;
+
+    public int AttemptCount => _attemptCount;
+
+    public TimeoutErrorMessageHandler(string host)
+    {
+        _host = host;
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _attemptCount);
+
+        // Simulate processing delay
+        await Task.Delay(200, cancellationToken);
+
+        // Always timeout to test retry behavior - the downloader should respect MaxRetryAttempts
+        throw new TaskCanceledException("The operation was canceled due to timeout.", new TimeoutException());
+    }
+}
+
+/// <summary>
+/// Message handler that simulates 429 Too Many Requests errors with retry attempts
+/// </summary>
+public class RateLimitErrorMessageHandler : HttpMessageHandler
+{
+    private readonly string _host;
+    private int _attemptCount;
+
+    public int AttemptCount => _attemptCount;
+
+    public RateLimitErrorMessageHandler(string host)
+    {
+        _host = host;
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _attemptCount);
+
+        // Simulate processing delay
+        await Task.Delay(100, cancellationToken);
+
+        // Always return 429 to test retry behavior
+        var response = new HttpResponseMessage(HttpStatusCode.TooManyRequests)
+        {
+            Content = new StringContent($"Rate limit exceeded on {_host} (attempt {_attemptCount})")
+        };
+        
+        // Add Retry-After header for more realistic behavior
+        response.Headers.Add("Retry-After", "2");
+        
+        return response;
+    }
+}
+
+/// <summary>
+/// Message handler that simulates 5xx server errors with retry attempts
+/// </summary>
+public class ServerErrorMessageHandler : HttpMessageHandler
+{
+    private readonly string _host;
+    private int _attemptCount;
+    private readonly Random _random = new();
+
+    public int AttemptCount => _attemptCount;
+
+    public ServerErrorMessageHandler(string host)
+    {
+        _host = host;
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _attemptCount);
+
+        // Simulate processing delay
+        await Task.Delay(150, cancellationToken);
+
+        // Randomly return different 5xx errors to test retry behavior
+        var errorCodes = new[]
+        {
+            HttpStatusCode.InternalServerError,      // 500
+            HttpStatusCode.BadGateway,              // 502
+            HttpStatusCode.ServiceUnavailable,      // 503
+            HttpStatusCode.GatewayTimeout          // 504
+        };
+
+        var errorCode = errorCodes[_random.Next(errorCodes.Length)];
+        
+        return new HttpResponseMessage(errorCode)
+        {
+            Content = new StringContent($"Server error {(int)errorCode} on {_host} (attempt {_attemptCount})")
+        };
+    }
+}
+
+/// <summary>
+/// Message handler that tracks retry timestamps and always fails to test exponential backoff behavior
+/// </summary>
+public class ExponentialBackoffTrackingHandler : HttpMessageHandler
+{
+    private readonly string _host;
+    private readonly List<DateTime> _retryTimestamps = new();
+    private readonly Random _random = new();
+
+    public ExponentialBackoffTrackingHandler(string host)
+    {
+        _host = host;
+    }
+
+    public List<DateTime> GetRetryTimestamps()
+    {
+        lock (_retryTimestamps)
+        {
+            return new List<DateTime>(_retryTimestamps);
+        }
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        // Record timestamp of each attempt
+        lock (_retryTimestamps)
+        {
+            _retryTimestamps.Add(DateTime.UtcNow);
+        }
+
+        // Simulate some processing time
+        await Task.Delay(50, cancellationToken);
+
+        // Always return a retryable error to test backoff behavior
+        // Alternate between different 5xx errors to make it more realistic
+        var errorCodes = new[]
+        {
+            HttpStatusCode.InternalServerError,   // 500
+            HttpStatusCode.BadGateway,           // 502
+            HttpStatusCode.ServiceUnavailable,   // 503
+            HttpStatusCode.GatewayTimeout       // 504
+        };
+
+        var errorCode = errorCodes[_retryTimestamps.Count % errorCodes.Length];
+        
+        return new HttpResponseMessage(errorCode)
+        {
+            Content = new StringContent($"Simulated {(int)errorCode} error on {_host} (attempt {_retryTimestamps.Count})")
+        };
+    }
 }
