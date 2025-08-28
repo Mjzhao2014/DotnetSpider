@@ -941,6 +941,114 @@ Crawl-delay: 0.5";
        Assert.Equal(5, _accessedUrls.Count);
     }
 
+    [Fact]
+    public async Task UseRobotsTxt_E2E_FetchesRobotsTxtForEachTargetHost()
+    {
+        
+        // Setup different robots.txt files for different hosts
+        var robotsContentHost1 = @"
+User-agent: *
+Disallow: /admin/
+Crawl-delay: 0.5";
+
+        var robotsContentHost2 = @"
+User-agent: *
+Disallow: /private/
+Allow: /public/
+Crawl-delay: 1";
+
+        var robotsContentHost3 = @"
+User-agent: *
+Disallow: /secret/
+Crawl-delay: 2";
+
+        // Track which robots.txt files were requested
+        var robotsRequests = new List<string>();
+        
+        // Setup robots.txt responses for different hosts
+        _httpMock.Protected()
+            .Setup<Task<HttpResponseMessage>>("SendAsync",
+                ItExpr.Is<HttpRequestMessage>(req => req.RequestUri.ToString().Contains("robots.txt")),
+                ItExpr.IsAny<CancellationToken>())
+            .ReturnsAsync((HttpRequestMessage req, CancellationToken token) =>
+            {
+                robotsRequests.Add(req.RequestUri.ToString());
+                
+                if (req.RequestUri.Host == "host1.example.com")
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new System.Net.Http.StringContent(robotsContentHost1)
+                    };
+                }
+                else if (req.RequestUri.Host == "host2.example.com")
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new System.Net.Http.StringContent(robotsContentHost2)
+                    };
+                }
+                else if (req.RequestUri.Host == "host3.example.com")
+                {
+                    return new HttpResponseMessage(HttpStatusCode.OK)
+                    {
+                        Content = new System.Net.Http.StringContent(robotsContentHost3)
+                    };
+                }
+                
+                return new HttpResponseMessage(HttpStatusCode.NotFound);
+            });
+
+        // Setup page responses for different hosts
+        SetupPageResponse("https://host1.example.com/", 
+            "<html><body><h1>Host 1 Home</h1><a href='/admin/panel.html'>Admin</a><a href='/public/info.html'>Public</a></body></html>");
+        SetupPageResponse("https://host1.example.com/public/info.html", 
+            "<html><body><h1>Host 1 Public</h1></body></html>");
+        SetupPageResponse("https://host1.example.com/admin/panel.html", 
+            "<html><body><h1>Host 1 Admin</h1></body></html>");
+
+        SetupPageResponse("https://host2.example.com/", 
+            "<html><body><h1>Host 2 Home</h1><a href='/private/data.html'>Private</a><a href='/public/info.html'>Public</a></body></html>");
+        SetupPageResponse("https://host2.example.com/public/info.html", 
+            "<html><body><h1>Host 2 Public</h1></body></html>");
+        SetupPageResponse("https://host2.example.com/private/data.html", 
+            "<html><body><h1>Host 2 Private</h1></body></html>");
+
+        SetupPageResponse("https://host3.example.com/", 
+            "<html><body><h1>Host 3 Home</h1><a href='/secret/data.html'>Secret</a><a href='/public/info.html'>Public</a></body></html>");
+        SetupPageResponse("https://host3.example.com/public/info.html", 
+            "<html><body><h1>Host 3 Public</h1></body></html>");
+        SetupPageResponse("https://host3.example.com/secret/data.html", 
+            "<html><body><h1>Host 3 Secret</h1></body></html>");
+
+        TestContext.Current = this;
+
+        // Act: Create spider with UseRobotsTxt() and multiple target hosts
+        var builder = Builder.CreateDefaultBuilder<MultiHostTestSpider>(options =>
+        {
+            options.Speed = 5;
+            options.Depth = 2;
+        });
+        
+        builder.UseRobotsTxt();
+        
+        builder.ConfigureServices(services =>
+        {
+            services.AddSingleton(_httpFactoryMock.Object);
+            services.AddHttpClient();
+        });
+
+        var spider = builder.Build();
+
+        using var cts = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        
+        await spider.RunAsync(cts.Token);
+
+
+        // On spider startup, fetch all the robots.txt files
+        Assert.Equal(3, robotsRequests.Count);
+    }
+
     private void SetupRobotsResponse(string host, string content)
     {
         _httpMock.Protected()
