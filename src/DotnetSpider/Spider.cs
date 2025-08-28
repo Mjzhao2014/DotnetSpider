@@ -33,6 +33,8 @@ public abstract class Spider :
     private readonly RequestedQueue _requestedQueue;
     private AsyncMessageConsumer<byte[]> _consumer;
     private readonly DependenceServices _services;
+    private readonly Robots.RobotsManager _robotsManager;
+    private readonly bool _respectRobots;
     private readonly IList<DataParser> _dataParsers;
     private ResponseDelegate _delegate;
 
@@ -86,6 +88,13 @@ public abstract class Spider :
         _requestSuppliers = new List<IRequestSupplier>();
         _flowBuilder = new();
         _dataParsers = new List<DataParser>();
+
+        // Determine whether robots.txt compliance is enabled via builder property.
+        _respectRobots = _services.HostBuilderContext?.Properties?.ContainsKey("UseRobotsTxt") == true;
+        if (_respectRobots)
+        {
+            _robotsManager = _services.ServiceProvider.GetService(typeof(Robots.RobotsManager)) as Robots.RobotsManager;
+        }
     }
 
     /// <summary>
@@ -196,6 +205,17 @@ public abstract class Spider :
 
         foreach (var request in requests)
         {
+            // Honor robots.txt if configured.
+            if (_respectRobots && _robotsManager != null)
+            {
+                var allowed = await _robotsManager.IsAllowedAsync(request);
+                if (!allowed)
+                {
+                    Logger.LogInformation("Skipping {Url} due to robots.txt disallow", request.RequestUri);
+                    continue;
+                }
+            }
+
             if (string.IsNullOrWhiteSpace(request.Downloader))
             {
                 request.Downloader = nameof(HttpClientDownloader);
@@ -564,6 +584,10 @@ public abstract class Spider :
         {
             foreach (var request in requests)
             {
+                if (_respectRobots && _robotsManager != null)
+                {
+                    await _robotsManager.EnforceDelayAsync(request);
+                }
                 // string topic;
                 // request.Timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
                 // if (string.IsNullOrWhiteSpace(request.Agent))
