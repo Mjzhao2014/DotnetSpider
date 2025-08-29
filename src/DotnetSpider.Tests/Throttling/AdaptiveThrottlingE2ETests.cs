@@ -223,8 +223,8 @@ public class AdaptiveThrottlingE2ETests : IDisposable
     public async Task E2E_AdaptiveConcurrency_RespondsToLoadPatterns()
     {
         // Arrange: Create special options for this test to ensure the increase branch can fire
-        var loadTestOptions = new AdaptiveThrottleOptions 
-        { 
+        var loadTestOptions = new AdaptiveThrottleOptions
+        {
             EnableAdaptiveThrottling = true,
             MaxRetryAttempts = 3,
             MinConcurrency = 1,
@@ -251,7 +251,7 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             loadTestOptions);
 
         var concurrencyHistory = new List<(DateTime timestamp, int concurrency)>();
-        
+        var isExceededMaxConcurrency = false;
         // Act: Generate sustained load
         var tasks = new List<Task>();
         for (int i = 0; i < 50; i++)
@@ -260,42 +260,47 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             tasks.Add(Task.Run(async () =>
             {
                 await downloader.DownloadAsync(request);
-                
+
                 // Record concurrency at various points
                 if (i % 5 == 0)
                 {
                     var stats = downloader.GetHostStats("load.com");
+                    if (stats.CurrentConcurrency > loadTestOptions.MaxConcurrency)
+                    {
+                        isExceededMaxConcurrency = true;
+                    }
                     lock (concurrencyHistory)
                     {
                         concurrencyHistory.Add((DateTime.UtcNow, stats?.CurrentConcurrency ?? 1));
                     }
                 }
             }));
-            
+
             // Stagger request initiation
             if (i % 3 == 0) await Task.Delay(20);
         }
 
         await Task.WhenAll(tasks);
-        
+
         // Assert: Verify adaptive behavior
         var finalStats = downloader.GetHostStats("load.com");
         Assert.NotNull(finalStats);
-        
+
         // Should have processed at least 50 requests (some may be retries due to load sensitivity)
-        Assert.True(finalStats.TotalRequests >= 50, 
+        Assert.True(finalStats.TotalRequests >= 50,
             $"Should have processed at least 50 requests, but got {finalStats.TotalRequests}");
         
         // Concurrency should be within configured bounds
         Assert.True(finalStats.CurrentConcurrency >= loadTestOptions.MinConcurrency);
         Assert.True(finalStats.CurrentConcurrency <= loadTestOptions.MaxConcurrency);
-        
+
         // Should show some concurrency variation over time
         if (concurrencyHistory.Count >= 3)
         {
             var uniqueConcurrencyValues = concurrencyHistory.Select(h => h.concurrency).Distinct().Count();
             Assert.True(uniqueConcurrencyValues > 1, "Concurrency should adapt over time");
         }
+        Assert.True(!isExceededMaxConcurrency, "Concurrency should not exceed MaxConcurrency");
     }
 
     [Fact]
