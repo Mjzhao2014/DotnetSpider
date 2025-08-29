@@ -58,7 +58,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             MaxRetryAttempts = 3,
             MinConcurrency = 1,
             MaxConcurrency = 8,
-            CooldownPeriod = TimeSpan.FromMilliseconds(1000),
             RequestSpacing = TimeSpan.FromMilliseconds(500),
             EwmaAlpha = 0.3,
             MinLatencyThresholdMs = 100,
@@ -230,7 +229,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             MaxRetryAttempts = 3,
             MinConcurrency = 1,
             MaxConcurrency = 8,
-            CooldownPeriod = TimeSpan.FromMilliseconds(1000),
             RequestSpacing = TimeSpan.FromMilliseconds(500),
             EwmaAlpha = 0.3,
             MinLatencyThresholdMs = 200, // Increased from 100 to allow increase branch to fire
@@ -627,14 +625,19 @@ public class AdaptiveThrottlingE2ETests : IDisposable
     public async Task E2E_RetryLogic_TimeoutsAndErrorCodes_RespectsMaxRetryAttempts()
     {
         // Arrange: Create handlers that simulate different error scenarios
+        // Note: Only timeouts, 429, and 5xx errors are retryable; 403/404 are not retryable
         var timeoutHandler = new TimeoutErrorMessageHandler("timeout.com");
         var rateLimitHandler = new RateLimitErrorMessageHandler("ratelimit.com");
         var serverErrorHandler = new ServerErrorMessageHandler("servererror.com");
+        var forbiddenHandler = new ForbiddenErrorMessageHandler("forbidden.com");
+        var notFoundHandler = new NotFoundErrorMessageHandler("notfound.com");
 
         var combinedHandler = new CompositeMessageHandler();
         combinedHandler.AddHandler("timeout.com", timeoutHandler);
         combinedHandler.AddHandler("ratelimit.com", rateLimitHandler);
         combinedHandler.AddHandler("servererror.com", serverErrorHandler);
+        combinedHandler.AddHandler("forbidden.com", forbiddenHandler);
+        combinedHandler.AddHandler("notfound.com", notFoundHandler);
 
         var httpClient = new HttpClient(combinedHandler);
         _httpClientFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
@@ -702,10 +705,51 @@ public class AdaptiveThrottlingE2ETests : IDisposable
                 serverErrorHandler.AttemptCount, serverErrorStopwatch.Elapsed));
         }
 
+        // Act: Test 403 Forbidden error scenario
+        var forbiddenStopwatch = Stopwatch.StartNew();
+        try
+        {
+            var forbiddenRequest = new Request("https://forbidden.com/test");
+            var forbiddenResponse = await downloader.DownloadAsync(forbiddenRequest);
+            forbiddenStopwatch.Stop();
+            
+            results.Add(("forbidden.com", forbiddenResponse.StatusCode, true, 
+                forbiddenHandler.AttemptCount, forbiddenStopwatch.Elapsed));
+        }
+        catch (Exception)
+        {
+            forbiddenStopwatch.Stop();
+            results.Add(("forbidden.com", HttpStatusCode.Forbidden, false, 
+                forbiddenHandler.AttemptCount, forbiddenStopwatch.Elapsed));
+        }
+
+        // Act: Test 404 Not Found error scenario
+        var notFoundStopwatch = Stopwatch.StartNew();
+        try
+        {
+            var notFoundRequest = new Request("https://notfound.com/test");
+            var notFoundResponse = await downloader.DownloadAsync(notFoundRequest);
+            notFoundStopwatch.Stop();
+            
+            results.Add(("notfound.com", notFoundResponse.StatusCode, true, 
+                notFoundHandler.AttemptCount, notFoundStopwatch.Elapsed));
+        }
+        catch (Exception)
+        {
+            notFoundStopwatch.Stop();
+            results.Add(("notfound.com", HttpStatusCode.NotFound, false, 
+                notFoundHandler.AttemptCount, notFoundStopwatch.Elapsed));
+        }
+
         // Verify individual handler retry counts
+        // Retryable errors (timeout, 429, 5xx) should respect MaxRetryAttempts
         Assert.Equal(_options.MaxRetryAttempts + 1, timeoutHandler.AttemptCount);
         Assert.Equal(_options.MaxRetryAttempts + 1, rateLimitHandler.AttemptCount);
         Assert.Equal(_options.MaxRetryAttempts + 1, serverErrorHandler.AttemptCount);
+        
+        // Non-retryable errors (403, 404) should only be attempted once
+        Assert.Equal(1, forbiddenHandler.AttemptCount);
+        Assert.Equal(1, notFoundHandler.AttemptCount);
     }
 
     [Fact]
@@ -718,7 +762,6 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             MaxRetryAttempts = 10, // Allow more retries to test exponential growth
             MinConcurrency = 1,
             MaxConcurrency = 4,
-            CooldownPeriod = TimeSpan.FromMilliseconds(100),
             RequestSpacing = TimeSpan.FromMilliseconds(50),
             EwmaAlpha = 0.3,
             MinLatencyThresholdMs = 100,
@@ -1643,6 +1686,66 @@ public class ExponentialBackoffTrackingHandler : HttpMessageHandler
         return new HttpResponseMessage(errorCode)
         {
             Content = new StringContent($"Simulated {(int)errorCode} error on {_host} (attempt {_retryTimestamps.Count})")
+        };
+    }
+}
+
+/// <summary>
+/// Message handler that simulates 403 Forbidden errors with retry attempts
+/// </summary>
+public class ForbiddenErrorMessageHandler : HttpMessageHandler
+{
+    private readonly string _host;
+    private int _attemptCount;
+
+    public int AttemptCount => _attemptCount;
+
+    public ForbiddenErrorMessageHandler(string host)
+    {
+        _host = host;
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _attemptCount);
+
+        // Simulate processing delay
+        await Task.Delay(80, cancellationToken);
+
+        // Always return 403 to test retry behavior
+        return new HttpResponseMessage(HttpStatusCode.Forbidden)
+        {
+            Content = new StringContent($"Access forbidden on {_host} (attempt {_attemptCount})")
+        };
+    }
+}
+
+/// <summary>
+/// Message handler that simulates 404 Not Found errors with retry attempts
+/// </summary>
+public class NotFoundErrorMessageHandler : HttpMessageHandler
+{
+    private readonly string _host;
+    private int _attemptCount;
+
+    public int AttemptCount => _attemptCount;
+
+    public NotFoundErrorMessageHandler(string host)
+    {
+        _host = host;
+    }
+
+    protected override async Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
+    {
+        Interlocked.Increment(ref _attemptCount);
+
+        // Simulate processing delay
+        await Task.Delay(60, cancellationToken);
+
+        // Always return 404 to test retry behavior
+        return new HttpResponseMessage(HttpStatusCode.NotFound)
+        {
+            Content = new StringContent($"Resource not found on {_host} (attempt {_attemptCount})")
         };
     }
 }
