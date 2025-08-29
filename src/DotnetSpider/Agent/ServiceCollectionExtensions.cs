@@ -18,8 +18,14 @@ public static class ServiceCollectionExtensions
             services.Configure(configure);
         }
 
+        // Register the adaptive throttle components
+        services.AddSingleton<AdaptiveThrottleOptions>();
+        services.AddSingleton<AdaptiveThrottleManager>();
+
         // 注册下载器
+        // Register the adaptive HttpClientDownloader alongside the default implementation.
         services.AddDownloader<HttpClientDownloader>();
+        services.AddDownloader<AdaptiveHttpClientDownloader>();
         services.AddDownloader<FileDownloader>();
         services.AddDownloader<EmptyDownloader>();
         services.AddDownloader<FakeHttpClientDownloader>();
