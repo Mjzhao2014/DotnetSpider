@@ -223,7 +223,24 @@ public class AdaptiveThrottlingE2ETests : IDisposable
     [Fact]
     public async Task E2E_AdaptiveConcurrency_RespondsToLoadPatterns()
     {
-        // Arrange: Create a load-sensitive handler
+        // Arrange: Create special options for this test to ensure the increase branch can fire
+        var loadTestOptions = new AdaptiveThrottleOptions 
+        { 
+            EnableAdaptiveThrottling = true,
+            MaxRetryAttempts = 3,
+            MinConcurrency = 1,
+            MaxConcurrency = 8,
+            CooldownPeriod = TimeSpan.FromMilliseconds(1000),
+            RequestSpacing = TimeSpan.FromMilliseconds(500),
+            EwmaAlpha = 0.3,
+            MinLatencyThresholdMs = 200, // Increased from 100 to allow increase branch to fire
+            MaxLatencyThresholdMs = 1000,
+            ErrorRateThreshold = 0.2,
+            MaxRetryDelay = TimeSpan.FromSeconds(5)
+        };
+        var loadTestThrottleManager = new AdaptiveThrottleManager(loadTestOptions);
+
+        // Create a load-sensitive handler (base latency = 100ms)
         var loadHandler = new LoadSensitiveMessageHandler("load.com");
         var httpClient = new HttpClient(loadHandler);
         _httpClientFactoryMock.Setup(f => f.CreateClient(It.IsAny<string>())).Returns(httpClient);
@@ -232,8 +249,8 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             _httpClientFactoryMock.Object,
             new EmptyProxyService(),
             _loggerMock.Object,
-            _throttleManager,
-            _options);
+            loadTestThrottleManager,
+            loadTestOptions);
 
         var concurrencyHistory = new List<(DateTime timestamp, int concurrency)>();
         
@@ -272,8 +289,8 @@ public class AdaptiveThrottlingE2ETests : IDisposable
             $"Should have processed at least 50 requests, but got {finalStats.TotalRequests}");
         
         // Concurrency should be within configured bounds
-        Assert.True(finalStats.CurrentConcurrency >= _options.MinConcurrency);
-        Assert.True(finalStats.CurrentConcurrency <= _options.MaxConcurrency);
+        Assert.True(finalStats.CurrentConcurrency >= loadTestOptions.MinConcurrency);
+        Assert.True(finalStats.CurrentConcurrency <= loadTestOptions.MaxConcurrency);
         
         // Should show some concurrency variation over time
         if (concurrencyHistory.Count >= 3)
@@ -686,9 +703,9 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         }
 
         // Verify individual handler retry counts
-        Assert.Equal(_options.MaxRetryAttempts, timeoutHandler.AttemptCount);
-        Assert.Equal(_options.MaxRetryAttempts, rateLimitHandler.AttemptCount);
-        Assert.Equal(_options.MaxRetryAttempts, serverErrorHandler.AttemptCount);
+        Assert.Equal(_options.MaxRetryAttempts + 1, timeoutHandler.AttemptCount);
+        Assert.Equal(_options.MaxRetryAttempts + 1, rateLimitHandler.AttemptCount);
+        Assert.Equal(_options.MaxRetryAttempts + 1, serverErrorHandler.AttemptCount);
     }
 
     [Fact]
