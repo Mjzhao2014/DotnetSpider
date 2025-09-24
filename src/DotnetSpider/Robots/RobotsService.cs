@@ -96,7 +96,6 @@ public class RobotsService : IRobotsService
             // use default used by Request.ToHttpRequestMessage
             ua = DefaultUserAgent;
         }
-        System.Console.WriteLine($"Resolved UA '{ua}' for {request.RequestUri}");
         return ua;
     }
 
@@ -113,7 +112,6 @@ public class RobotsService : IRobotsService
             return true;
         }
         var allowed = group.IsAllowed(request.RequestUri.PathAndQuery);
-        System.Console.WriteLine($"IsAllowed for {request.RequestUri.PathAndQuery} with UA {GetUserAgent(request)} -> {allowed}");
         return allowed;
     }
 

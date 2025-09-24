@@ -102,10 +102,6 @@ public class RobotsFile
                     break;
             }
         }
-        foreach (var group in file.Groups)
-        {
-            System.Console.WriteLine($"Group parsed: agents=[{string.Join(',', group.UserAgents)}] allow=[{string.Join(',', group.Allow)}] disallow=[{string.Join(',', group.Disallow)}] delay={group.CrawlDelay}");
-        }
         return file;
     }
 
@@ -131,7 +127,6 @@ public class RobotsFile
                     // consider wildcard only if nothing more specific found
                     if (best == null)
                     {
-                        System.Console.WriteLine($"Wildcard group considered for UA '{userAgent}'");
                         best = group;
                     }
                 }
@@ -139,16 +134,11 @@ public class RobotsFile
                 {
                     if (pattern.Length > bestLength)
                     {
-                        System.Console.WriteLine($"Matched group '{agentPattern}' for UA '{userAgent}'");
                         best = group;
                         bestLength = pattern.Length;
                     }
                 }
             }
-        }
-        if (best == null)
-        {
-            System.Console.WriteLine($"No group matched for UA '{userAgent}'");
         }
         return best;
     }

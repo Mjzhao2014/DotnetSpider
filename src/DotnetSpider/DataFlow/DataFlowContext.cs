@@ -90,7 +90,6 @@ public class DataFlowContext : IDisposable
                     if (!string.IsNullOrWhiteSpace(currentUserAgent))
                     {
                         request.Headers[HeaderNames.UserAgent] = currentUserAgent;
-                        System.Console.WriteLine($"Copied UA '{currentUserAgent}' to follow request {request.RequestUri}");
                     }
                 }
             }

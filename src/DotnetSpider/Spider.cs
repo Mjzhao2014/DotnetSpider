@@ -495,7 +495,6 @@ public abstract class Spider :
         {
             while (_requestedQueue.Count > 0 && !stoppingToken.IsCancellationRequested)
             {
-                System.Console.WriteLine($"Waiting for {_requestedQueue.Count} in-flight requests");
                 await Task.Delay(10, stoppingToken);
             }
             await ExitAsync();
@@ -625,7 +624,6 @@ public abstract class Spider :
 
                 if (_requestedQueue.Enqueue(request))
                 {
-                    System.Console.WriteLine($"Publishing request {request.RequestUri}");
                     await _services.MessageQueue.PublishAsBytesAsync("Agent", request);
                 }
                 else
@@ -658,9 +656,7 @@ public abstract class Spider :
     {
         try
         {
-            System.Console.WriteLine($"Locally processing {request.RequestUri}");
             var downloader = _services.ServiceProvider.GetKeyedService<IDownloader>(request.Downloader);
-            System.Console.WriteLine($"Using downloader {downloader?.GetType().Name} for {request.RequestUri}");
             var response = await downloader.DownloadAsync(request);
             if (response == null)
             {
@@ -679,7 +675,6 @@ public abstract class Spider :
             }
 
             response.Agent = SpiderId.Id;
-            System.Console.WriteLine($"Response status {(int)response.StatusCode} for {request.RequestUri}");
             await HandleResponseAsync(request, response, null);
         }
         catch (Exception e)
