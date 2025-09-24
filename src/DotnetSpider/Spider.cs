@@ -21,6 +21,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+using DotnetSpider.Robots;
+
 [assembly: InternalsVisibleTo("DotnetSpider.Tests")]
 
 namespace DotnetSpider;
@@ -35,6 +37,8 @@ public abstract class Spider :
     private readonly DependenceServices _services;
     private readonly IList<DataParser> _dataParsers;
     private ResponseDelegate _delegate;
+
+    private readonly IRobotsService? _robotsService;
 
     /// <summary>
     /// 请求 Timeout 事件
@@ -86,6 +90,8 @@ public abstract class Spider :
         _requestSuppliers = new List<IRequestSupplier>();
         _flowBuilder = new();
         _dataParsers = new List<DataParser>();
+        // try resolve robots txt support if configured
+        _robotsService = services.ServiceProvider.GetService(typeof(IRobotsService)) as IRobotsService;
     }
 
     /// <summary>
@@ -446,6 +452,17 @@ public abstract class Spider :
                         while (bucket.ShouldThrottle(1, out var waitTimeMillis))
                         {
                             await Task.Delay(waitTimeMillis, default(CancellationToken));
+                        }
+
+                        // If robots support is enabled, ensure URL is allowed and honor crawl-delay
+                        if (Options.UseRobotsTxt && _robotsService != null)
+                        {
+                            if (!await _robotsService.IsAllowedAsync(request))
+                            {
+                                Logger.LogDebug("Skipping disallowed URL per robots.txt: {Url}", request.RequestUri);
+                                continue;
+                            }
+                            await _robotsService.WaitForDelayAsync(request);
                         }
 
                         if (!await PublishRequestMessagesAsync(request))

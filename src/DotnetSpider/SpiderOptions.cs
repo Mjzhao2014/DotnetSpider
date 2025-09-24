@@ -46,4 +46,11 @@ public class SpiderOptions
     /// 获取新代码的时间间隔
     /// </summary>
     public int RefreshProxy { get; set; } = 30;
+
+    /// <summary>
+    /// Whether to enable respecting robots.txt rules for target hosts.
+    /// When enabled, the spider will attempt to fetch and parse each host's
+    /// robots.txt file and apply Allow/Disallow/Crawl-delay directives accordingly.
+    /// </summary>
+    public bool UseRobotsTxt { get; set; } = false;
 }
