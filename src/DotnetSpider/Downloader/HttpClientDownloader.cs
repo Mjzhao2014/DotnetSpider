@@ -45,6 +45,7 @@ public class HttpClientDownloader : IDownloader
             stopwatch.Stop();
 
             var elapsedMilliseconds = stopwatch.ElapsedMilliseconds;
+            System.Console.WriteLine($"Received response {httpResponseMessage.StatusCode} for {request.RequestUri}");
 
             var response = await HandleAsync(request, httpResponseMessage);
             if (response != null)
@@ -57,6 +58,7 @@ public class HttpClientDownloader : IDownloader
             response.ElapsedMilliseconds = (int)elapsedMilliseconds;
             response.RequestHash = request.Hash;
             response.Version = httpResponseMessage.Version;
+            System.Console.WriteLine($"HTTP response {(int)response.StatusCode} for {request.RequestUri}");
 
             return response;
         }
@@ -80,6 +82,7 @@ public class HttpClientDownloader : IDownloader
     protected virtual async Task<HttpResponseMessage> SendAsync(HttpClient httpClient,
         HttpRequestMessage httpRequestMessage)
     {
+        System.Console.WriteLine($"HTTP send {httpRequestMessage.RequestUri}");
         return await httpClient.SendAsync(httpRequestMessage);
     }
 

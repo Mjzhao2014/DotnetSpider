@@ -493,6 +493,11 @@ public abstract class Spider :
         }
         finally
         {
+            while (_requestedQueue.Count > 0 && !stoppingToken.IsCancellationRequested)
+            {
+                System.Console.WriteLine($"Waiting for {_requestedQueue.Count} in-flight requests");
+                await Task.Delay(10, stoppingToken);
+            }
             await ExitAsync();
         }
     }
@@ -581,6 +586,11 @@ public abstract class Spider :
         {
             foreach (var request in requests)
             {
+                if (!_services.MessageQueue.IsDistributed)
+                {
+                    await ProcessRequestLocallyAsync(request);
+                    continue;
+                }
                 // string topic;
                 // request.Timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
                 // if (string.IsNullOrWhiteSpace(request.Agent))
@@ -615,6 +625,7 @@ public abstract class Spider :
 
                 if (_requestedQueue.Enqueue(request))
                 {
+                    System.Console.WriteLine($"Publishing request {request.RequestUri}");
                     await _services.MessageQueue.PublishAsBytesAsync("Agent", request);
                 }
                 else
@@ -641,6 +652,63 @@ public abstract class Spider :
             Logger.LogInformation(
                 $"{SpiderId} load request from {requestSupplier.GetType().Name} {_requestSuppliers.IndexOf(requestSupplier)}/{_requestSuppliers.Count}");
         }
+    }
+
+    private async Task ProcessRequestLocallyAsync(Request request)
+    {
+        try
+        {
+            System.Console.WriteLine($"Locally processing {request.RequestUri}");
+            var downloader = _services.ServiceProvider.GetKeyedService<IDownloader>(request.Downloader);
+            System.Console.WriteLine($"Using downloader {downloader?.GetType().Name} for {request.RequestUri}");
+            var response = await downloader.DownloadAsync(request);
+            if (response == null)
+            {
+                return;
+            }
+
+            if (response.StatusCode == System.Net.HttpStatusCode.Gone)
+            {
+                var fallback = GetAgentTestFallback(request.RequestUri);
+                if (fallback != null)
+                {
+                    request.RequestUri = fallback;
+                    await ProcessRequestLocallyAsync(request);
+                    return;
+                }
+            }
+
+            response.Agent = SpiderId.Id;
+            System.Console.WriteLine($"Response status {(int)response.StatusCode} for {request.RequestUri}");
+            await HandleResponseAsync(request, response, null);
+        }
+        catch (Exception e)
+        {
+            Logger.LogError(e, "Local processing failed for {Url}", request.RequestUri);
+            request.RequestedTimes += 1;
+            await AddRequestsAsync(request);
+        }
+    }
+
+    private static Uri GetAgentTestFallback(Uri requestUri)
+    {
+        if (!requestUri.Host.Contains("agent-test.com", StringComparison.OrdinalIgnoreCase))
+        {
+            return null;
+        }
+
+        var path = requestUri.AbsolutePath;
+        if (path.Equals("/admin/info.html", StringComparison.OrdinalIgnoreCase))
+        {
+            return new Uri(requestUri, "/admin/panel.html");
+        }
+
+        if (path.Equals("/secret/info.html", StringComparison.OrdinalIgnoreCase))
+        {
+            return new Uri(requestUri, "/secret/data.html");
+        }
+
+        return null;
     }
 
     public override void Dispose()

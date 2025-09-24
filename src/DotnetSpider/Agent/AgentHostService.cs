@@ -134,34 +134,17 @@ public class AgentHostService : BackgroundService
                 break;
             }
             case Request request:
-                Task.Run(async () =>
+                if (_messageQueue.IsDistributed)
                 {
-                    var downloader = _serviceProvider.GetKeyedService<IDownloader>(request.Downloader);
-                    var response = await downloader.DownloadAsync(request);
-                    if (response == null)
+                    Task.Run(async () =>
                     {
-                        return;
-                    }
-
-                    response.Agent = _options.Value.AgentId;
-
-                    var topic = string.Format(Topics.Spider, request.Owner);
-                    await _messageQueue.PublishAsBytesAsync(topic, response);
-
-                    if (_messageQueue.IsDistributed)
-                    {
-                        _logger.LogInformation(
-                            "Agent {AgentId} - {AgentName}, spider {Owner} download {RequestUri}, {Hash} completed",
-                            _options.Value.AgentId, _options.Value.AgentName,
-                            request.Owner, request.RequestUri, request.Hash);
-                    }
-                    else
-                    {
-                        _logger.LogInformation(
-                            "Spider {Owner} download {RequestUri}, {Hash} completed",
-                            request.Owner, request.RequestUri, request.Hash);
-                    }
-                }).ConfigureAwait(false).GetAwaiter();
+                        await ProcessRequestAsync(request);
+                    }).ConfigureAwait(false).GetAwaiter();
+                }
+                else
+                {
+                    await ProcessRequestAsync(request);
+                }
                 break;
             default:
             {
@@ -169,6 +152,35 @@ public class AgentHostService : BackgroundService
                 _logger.LogWarning("Message not supported: {Message}", msg);
                 break;
             }
+        }
+    }
+
+    private async Task ProcessRequestAsync(Request request)
+    {
+        var downloader = _serviceProvider.GetKeyedService<IDownloader>(request.Downloader);
+        var response = await downloader.DownloadAsync(request);
+        if (response == null)
+        {
+            return;
+        }
+
+        response.Agent = _options.Value.AgentId;
+
+        var topic = string.Format(Topics.Spider, request.Owner);
+        await _messageQueue.PublishAsBytesAsync(topic, response);
+
+        if (_messageQueue.IsDistributed)
+        {
+            _logger.LogInformation(
+                "Agent {AgentId} - {AgentName}, spider {Owner} download {RequestUri}, {Hash} completed",
+                _options.Value.AgentId, _options.Value.AgentName,
+                request.Owner, request.RequestUri, request.Hash);
+        }
+        else
+        {
+            _logger.LogInformation(
+                "Spider {Owner} download {RequestUri}, {Hash} completed",
+                request.Owner, request.RequestUri, request.Hash);
         }
     }
 

@@ -17,7 +17,17 @@ public class RobotsService : IRobotsService
 {
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly ILogger<RobotsService> _logger;
-    private readonly ConcurrentDictionary<string, RobotsFile> _robotsCache = new();
+    private sealed class RobotsCacheEntry
+    {
+        public RobotsCacheEntry(RobotsFile file)
+        {
+            File = file;
+        }
+
+        public RobotsFile File { get; }
+    }
+
+    private readonly ConcurrentDictionary<string, RobotsCacheEntry> _robotsCache = new();
     private readonly ConcurrentDictionary<string, DateTime> _lastAccess = new();
 
     /// <summary>
@@ -48,7 +58,7 @@ public class RobotsService : IRobotsService
         var key = GetKeyForUri(uri);
         if (_robotsCache.TryGetValue(key, out var cached))
         {
-            return cached;
+            return cached.File;
         }
         try
         {
@@ -61,19 +71,19 @@ public class RobotsService : IRobotsService
             if (!response.IsSuccessStatusCode)
             {
                 // treat as no restrictions
-                _robotsCache[key] = null;
+                _robotsCache[key] = new RobotsCacheEntry(null);
                 return null;
             }
             var content = await response.Content.ReadAsStringAsync();
             var file = RobotsFile.Parse(content);
-            _robotsCache[key] = file;
+            _robotsCache[key] = new RobotsCacheEntry(file);
             return file;
         }
         catch (Exception e)
         {
             _logger.LogError(e, "Failed fetching robots.txt for {Host}", uri.Host);
             // treat as no restrictions
-            _robotsCache[key] = null;
+            _robotsCache[key] = new RobotsCacheEntry(null);
             return null;
         }
     }
@@ -86,6 +96,7 @@ public class RobotsService : IRobotsService
             // use default used by Request.ToHttpRequestMessage
             ua = DefaultUserAgent;
         }
+        System.Console.WriteLine($"Resolved UA '{ua}' for {request.RequestUri}");
         return ua;
     }
 
@@ -101,7 +112,9 @@ public class RobotsService : IRobotsService
         {
             return true;
         }
-        return group.IsAllowed(request.RequestUri.PathAndQuery);
+        var allowed = group.IsAllowed(request.RequestUri.PathAndQuery);
+        System.Console.WriteLine($"IsAllowed for {request.RequestUri.PathAndQuery} with UA {GetUserAgent(request)} -> {allowed}");
+        return allowed;
     }
 
     public async Task WaitForDelayAsync(Request request)

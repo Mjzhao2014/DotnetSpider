@@ -40,90 +40,95 @@ public class RobotsGroup
     /// <param name="path">URI path and query to evaluate.</param>
     public bool IsAllowed(string path)
     {
-        // gather all matching directives and choose longest match
-        var matches = new List<(bool Allow, string Pattern)>();
+        var matches = new List<(bool Allow, int Length, string Pattern)>();
+
         foreach (var pattern in Allow)
         {
-            if (Matches(path, pattern))
+            var length = GetMatchLength(path, pattern);
+            if (length >= 0)
             {
-                matches.Add((true, pattern));
+                matches.Add((true, length, pattern));
             }
         }
+
         foreach (var pattern in Disallow)
         {
-            if (Matches(path, pattern))
+            var length = GetMatchLength(path, pattern);
+            if (length >= 0)
             {
-                matches.Add((false, pattern));
+                matches.Add((false, length, pattern));
             }
         }
+
         if (matches.Count == 0)
         {
             return true;
         }
-        var longest = matches.OrderByDescending(m => m.Pattern.Length).First();
-        return longest.Allow;
+
+        var bestMatch = matches
+            .OrderByDescending(m => m.Length)
+            .ThenByDescending(m => m.Allow)
+            .First();
+
+        return bestMatch.Allow;
     }
 
-    /// <summary>
-    /// Checks whether a path matches a robots directive pattern. Patterns may include
-    /// '*' wildcards which match any sequence of characters. Matching is case-insensitive.
-    /// If the pattern does not contain any wildcards it is treated as a simple prefix match.
-    /// </summary>
-    private static bool Matches(string path, string pattern)
+    private static int GetMatchLength(string path, string pattern)
     {
         if (string.IsNullOrEmpty(pattern))
         {
-            return false;
+            return -1;
         }
-        // normalize to lower-case for case-insensitive comparison
-        var text = path.ToLowerInvariant();
-        pattern = pattern.ToLowerInvariant();
-        // simple prefix match if no wildcard present
-        if (!pattern.Contains('*'))
-        {
-            return text.StartsWith(pattern);
-        }
-        return WildcardMatch(text, pattern);
-    }
 
-    /// <summary>
-    /// Performs basic wildcard matching supporting '*' wildcard which matches 0 or more characters.
-    /// </summary>
-    private static bool WildcardMatch(string text, string pattern)
-    {
-        int t = 0, p = 0, star = -1, match = 0;
-        while (t < text.Length)
+        var text = path.ToLowerInvariant();
+        var pat = pattern.ToLowerInvariant();
+
+        int textIndex = 0;
+        int patternIndex = 0;
+        int starPatternIndex = -1;
+        int starTextIndex = 0;
+        int lastMatchEnd = 0;
+
+        while (textIndex < text.Length)
         {
-            if (p < pattern.Length && (pattern[p] == '*' || pattern[p] == text[t]))
+            if (patternIndex < pat.Length && (pat[patternIndex] == '*' || pat[patternIndex] == text[textIndex]))
             {
-                if (pattern[p] == '*')
+                if (pat[patternIndex] == '*')
                 {
-                    star = p;
-                    match = t;
-                    p++;
+                    starPatternIndex = patternIndex++;
+                    starTextIndex = textIndex;
+                    lastMatchEnd = textIndex;
                 }
                 else
                 {
-                    t++;
-                    p++;
+                    patternIndex++;
+                    textIndex++;
+                    lastMatchEnd = textIndex;
                 }
             }
-            else if (star != -1)
+            else if (starPatternIndex != -1)
             {
-                p = star + 1;
-                match++;
-                t = match;
+                patternIndex = starPatternIndex + 1;
+                starTextIndex++;
+                textIndex = starTextIndex;
+                lastMatchEnd = textIndex;
             }
             else
             {
-                return false;
+                break;
             }
         }
-        // consume trailing '*' in pattern
-        while (p < pattern.Length && pattern[p] == '*')
+
+        while (patternIndex < pat.Length && pat[patternIndex] == '*')
         {
-            p++;
+            patternIndex++;
         }
-        return p == pattern.Length;
+
+        if (patternIndex != pat.Length)
+        {
+            return -1;
+        }
+
+        return lastMatchEnd;
     }
 }
