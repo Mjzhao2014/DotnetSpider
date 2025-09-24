@@ -17,7 +17,7 @@ internal class HostGate
     private readonly Queue<TaskCompletionSource<bool>> _waitQueue = new();
     private int _concurrencyInFlight;
     private int _concurrencyLimit;
-    private DateTimeOffset _lastRequestStart;
+    private DateTimeOffset _lastRequestStart = DateTimeOffset.MinValue;
 
     private double _ewmaLatency;
     private long _totalRequests;
@@ -44,8 +44,7 @@ internal class HostGate
     /// <summary>
     /// Acquire a concurrency slot for this host. If the current number of in-flight requests
     /// meets or exceeds the concurrency limit, the returned task will not complete until a slot
-    /// becomes available. When a slot becomes available, the caller may proceed, subject to
-    /// optional request spacing enforcement.
+    /// becomes available.
     /// </summary>
     public async Task AcquireAsync()
     {
@@ -66,23 +65,53 @@ internal class HostGate
         {
             await waiter.Task.ConfigureAwait(false);
         }
+    }
 
-        // optional spacing between requests
-        if (_options.RequestSpacing > TimeSpan.Zero)
+    /// <summary>
+    /// Waits until the per-host minimum request spacing requirement is satisfied and records the
+    /// actual request start time. Must be invoked immediately before sending the HTTP request.
+    /// </summary>
+    public async Task WaitForRequestWindowAsync()
+    {
+        if (_options.RequestSpacing <= TimeSpan.Zero)
         {
-            var now = DateTimeOffset.UtcNow;
-            var sinceLast = now - _lastRequestStart;
-            if (sinceLast < _options.RequestSpacing)
+            lock (_lock)
             {
-                var delay = _options.RequestSpacing - sinceLast;
-                if (delay > TimeSpan.Zero)
+                var now = DateTimeOffset.UtcNow;
+                _lastRequestStart = now;
+                LastActive = now;
+            }
+            return;
+        }
+
+        while (true)
+        {
+            DateTimeOffset waitUntil;
+            lock (_lock)
+            {
+                var now = DateTimeOffset.UtcNow;
+                if (_lastRequestStart == DateTimeOffset.MinValue)
                 {
-                    await Task.Delay(delay).ConfigureAwait(false);
+                    _lastRequestStart = now;
+                    LastActive = now;
+                    return;
+                }
+
+                waitUntil = _lastRequestStart + _options.RequestSpacing;
+                if (now >= waitUntil)
+                {
+                    _lastRequestStart = now;
+                    LastActive = now;
+                    return;
                 }
             }
+
+            var delay = waitUntil - DateTimeOffset.UtcNow;
+            if (delay > TimeSpan.Zero)
+            {
+                await Task.Delay(delay).ConfigureAwait(false);
+            }
         }
-        _lastRequestStart = DateTimeOffset.UtcNow;
-        LastActive = _lastRequestStart;
     }
 
     /// <summary>

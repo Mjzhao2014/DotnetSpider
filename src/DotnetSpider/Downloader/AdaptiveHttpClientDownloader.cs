@@ -71,6 +71,7 @@ public class AdaptiveHttpClientDownloader : HttpClientDownloader
                 await hostGate.AcquireAsync().ConfigureAwait(false);
                 httpRequestMessage = request.ToHttpRequestMessage();
                 var httpClient = await CreateClientAsync(request).ConfigureAwait(false);
+                await hostGate.WaitForRequestWindowAsync().ConfigureAwait(false);
                 stopwatch.Start();
                 httpResponseMessage = await SendAsync(httpClient, httpRequestMessage).ConfigureAwait(false);
                 stopwatch.Stop();
