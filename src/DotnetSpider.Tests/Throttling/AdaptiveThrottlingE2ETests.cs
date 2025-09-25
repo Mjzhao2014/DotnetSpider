@@ -161,9 +161,12 @@ public class AdaptiveThrottlingE2ETests : IDisposable
         // Verify total requests were processed
         Assert.Equal(10, fastStats.TotalRequests);
 
-        // ErrorRate > 0, 10<=totalrequest <=13 
-        Assert.True(slowStats.TotalRequests >= 10 && slowStats.TotalRequests <= 10 + _options.MaxRetryAttempts);
-        Assert.True(errorStats.TotalRequests >= 10  && errorStats.TotalRequests <= 10 + _options.MaxRetryAttempts);
+        // Error-prone hosts may retry each request up to MaxRetryAttempts additional times.
+        var maxObservedRequests = 10 * (_options.MaxRetryAttempts + 1);
+        Assert.True(slowStats.TotalRequests >= 10 && slowStats.TotalRequests <= maxObservedRequests,
+            $"Slow host should show between 10 and {maxObservedRequests} attempts, actual: {slowStats.TotalRequests}");
+        Assert.True(errorStats.TotalRequests >= 10 && errorStats.TotalRequests <= maxObservedRequests,
+            $"Error host should show between 10 and {maxObservedRequests} attempts, actual: {errorStats.TotalRequests}");
     }
 
     [Fact]
