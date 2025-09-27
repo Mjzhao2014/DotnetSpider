@@ -27,7 +27,7 @@ public class HttpClientDownloader : IDownloader
         UseProxy = !(_proxyService is EmptyProxyService);
     }
 
-    public async Task<Response> DownloadAsync(Request request)
+    public virtual async Task<Response> DownloadAsync(Request request)
     {
         HttpResponseMessage httpResponseMessage = null;
         HttpRequestMessage httpRequestMessage = null;

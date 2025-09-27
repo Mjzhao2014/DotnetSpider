@@ -51,7 +51,7 @@ public class AdaptiveHttpClientDownloader : HttpClientDownloader
     /// <summary>
     /// Download the request applying per-host adaptive throttling and built-in retry logic.
     /// </summary>
-    public new async Task<Response> DownloadAsync(Request request)
+    public override async Task<Response> DownloadAsync(Request request)
     {
         if (!_options.EnableAdaptiveThrottling)
         {
