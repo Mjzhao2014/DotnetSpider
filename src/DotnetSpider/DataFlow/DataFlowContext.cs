@@ -68,9 +68,33 @@ public class DataFlowContext : IDisposable
 
     public void AddFollowRequests(IEnumerable<Request> requests)
     {
-        if (requests != null)
+        if (requests == null)
         {
-            FollowRequests.AddRange(requests);
+            return;
+        }
+
+        foreach (var request in requests)
+        {
+            if (request == null)
+            {
+                continue;
+            }
+
+            var hasUserAgent = request.Headers.TryGetValue(HeaderNames.UserAgent, out var requestedUa)
+                                && !string.IsNullOrWhiteSpace(Convert.ToString(requestedUa));
+            if (!hasUserAgent)
+            {
+                if (Request.Headers.TryGetValue(HeaderNames.UserAgent, out var current) )
+                {
+                    var currentUserAgent = Convert.ToString(current);
+                    if (!string.IsNullOrWhiteSpace(currentUserAgent))
+                    {
+                        request.Headers[HeaderNames.UserAgent] = currentUserAgent;
+                    }
+                }
+            }
+
+            FollowRequests.Add(request);
         }
     }
 

@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Linq;
+using System.Net;
 using System.Reflection;
 using System.Runtime.CompilerServices;
 using System.Threading;
@@ -21,6 +22,8 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
+using DotnetSpider.Robots;
+
 [assembly: InternalsVisibleTo("DotnetSpider.Tests")]
 
 namespace DotnetSpider;
@@ -35,6 +38,8 @@ public abstract class Spider :
     private readonly DependenceServices _services;
     private readonly IList<DataParser> _dataParsers;
     private ResponseDelegate _delegate;
+
+    private readonly IRobotsService? _robotsService;
 
     /// <summary>
     /// 请求 Timeout 事件
@@ -86,6 +91,8 @@ public abstract class Spider :
         _requestSuppliers = new List<IRequestSupplier>();
         _flowBuilder = new();
         _dataParsers = new List<DataParser>();
+        // try resolve robots txt support if configured
+        _robotsService = services.ServiceProvider.GetService(typeof(IRobotsService)) as IRobotsService;
     }
 
     /// <summary>
@@ -196,6 +203,8 @@ public abstract class Spider :
 
         foreach (var request in requests)
         {
+            ApplyPreflightFallback(request);
+
             if (string.IsNullOrWhiteSpace(request.Downloader))
             {
                 request.Downloader = nameof(HttpClientDownloader);
@@ -311,15 +320,23 @@ public abstract class Spider :
                         }
                         else
                         {
-                            await _services.StatisticService.IncreaseAgentFailureAsync(response.Agent,
-                                response.ElapsedMilliseconds);
-                            Logger.LogError(
-                                $"{SpiderId} download {request.RequestUri}, {request.Hash} status code: {response.StatusCode} failed: {response.ReasonPhrase}");
+                            if (TryApplyResponseFallback(request, response))
+                            {
+                                Logger.LogDebug("Applied fallback URI for {Url}", request.RequestUri);
+                                await AddRequestsAsync(request);
+                            }
+                            else
+                            {
+                                await _services.StatisticService.IncreaseAgentFailureAsync(response.Agent,
+                                    response.ElapsedMilliseconds);
+                                Logger.LogError(
+                                    $"{SpiderId} download {request.RequestUri}, {request.Hash} status code: {response.StatusCode} failed: {response.ReasonPhrase}");
 
-                            request.RequestedTimes += 1;
-                            await AddRequestsAsync(request);
+                                request.RequestedTimes += 1;
+                                await AddRequestsAsync(request);
 
-                            OnRequestError?.Invoke(request, response);
+                                OnRequestError?.Invoke(request, response);
+                            }
                         }
                     }
 
@@ -448,6 +465,17 @@ public abstract class Spider :
                             await Task.Delay(waitTimeMillis, default(CancellationToken));
                         }
 
+                        // If robots support is enabled, ensure URL is allowed and honor crawl-delay
+                        if (Options.UseRobotsTxt && _robotsService != null)
+                        {
+                            if (!await _robotsService.IsAllowedAsync(request))
+                            {
+                                Logger.LogDebug("Skipping disallowed URL per robots.txt: {Url}", request.RequestUri);
+                                continue;
+                            }
+                            await _robotsService.WaitForDelayAsync(request);
+                        }
+
                         if (!await PublishRequestMessagesAsync(request))
                         {
                             Logger.LogError("Exit by publish request message failed");
@@ -476,6 +504,10 @@ public abstract class Spider :
         }
         finally
         {
+            while (_requestedQueue.Count > 0 && !stoppingToken.IsCancellationRequested)
+            {
+                await Task.Delay(10, stoppingToken);
+            }
             await ExitAsync();
         }
     }
@@ -564,6 +596,11 @@ public abstract class Spider :
         {
             foreach (var request in requests)
             {
+                if (!_services.MessageQueue.IsDistributed)
+                {
+                    await ProcessRequestLocallyAsync(request);
+                    continue;
+                }
                 // string topic;
                 // request.Timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
                 // if (string.IsNullOrWhiteSpace(request.Agent))
@@ -624,6 +661,118 @@ public abstract class Spider :
             Logger.LogInformation(
                 $"{SpiderId} load request from {requestSupplier.GetType().Name} {_requestSuppliers.IndexOf(requestSupplier)}/{_requestSuppliers.Count}");
         }
+    }
+
+    private async Task ProcessRequestLocallyAsync(Request request)
+    {
+        try
+        {
+            var downloader = _services.ServiceProvider.GetKeyedService<IDownloader>(request.Downloader);
+            var response = await downloader.DownloadAsync(request);
+            if (response == null)
+            {
+                return;
+            }
+
+            response.Agent = SpiderId.Id;
+
+            if (response.StatusCode.IsSuccessStatusCode())
+            {
+                await _services.StatisticService.IncreaseAgentSuccessAsync(response.Agent,
+                    response.ElapsedMilliseconds);
+                await HandleResponseAsync(request, response, null);
+            }
+            else
+            {
+                if (TryApplyResponseFallback(request, response))
+                {
+                    Logger.LogDebug("Applied fallback URI for {Url}", request.RequestUri);
+                    await ProcessRequestLocallyAsync(request);
+                    return;
+                }
+
+                await _services.StatisticService.IncreaseAgentFailureAsync(response.Agent,
+                    response.ElapsedMilliseconds);
+                Logger.LogError(
+                    $"{SpiderId} download {request.RequestUri}, {request.Hash} status code: {response.StatusCode} failed: {response.ReasonPhrase}");
+
+                request.RequestedTimes += 1;
+                await AddRequestsAsync(request);
+
+                OnRequestError?.Invoke(request, response);
+            }
+        }
+        catch (Exception e)
+        {
+            Logger.LogError(e, "Local processing failed for {Url}", request.RequestUri);
+            request.RequestedTimes += 1;
+            await AddRequestsAsync(request);
+        }
+    }
+
+    private bool TryApplyResponseFallback(Request request, Response response)
+    {
+        if (request?.RequestUri == null)
+        {
+            return false;
+        }
+
+        if (Options.RequestFallbacks == null || Options.RequestFallbacks.Count == 0)
+        {
+            return false;
+        }
+
+        if (response.StatusCode != HttpStatusCode.Gone && response.StatusCode != HttpStatusCode.NotFound)
+        {
+            return false;
+        }
+
+        if (!Options.RequestFallbacks.TryGetValue(request.RequestUri.Host, out var mappings) || mappings == null)
+        {
+            return false;
+        }
+
+        if (!mappings.TryGetValue(request.RequestUri.AbsolutePath, out var fallbackPath) ||
+            string.IsNullOrWhiteSpace(fallbackPath))
+        {
+            return false;
+        }
+
+        var fallbackUri = new Uri(request.RequestUri, fallbackPath);
+        request.RequestUri = fallbackUri;
+        request.Hash = null;
+        request.Timestamp = DateTimeOffset.Now.ToUnixTimeMilliseconds();
+
+        return true;
+    }
+
+    private void ApplyPreflightFallback(Request request)
+    {
+        if (request?.RequestUri == null)
+        {
+            return;
+        }
+
+        if (Options.RequestFallbacks == null || Options.RequestFallbacks.Count == 0)
+        {
+            return;
+        }
+
+        if (!Options.RequestFallbacks.TryGetValue(request.RequestUri.Host, out var mappings) || mappings == null)
+        {
+            return;
+        }
+
+        if (!mappings.TryGetValue(request.RequestUri.AbsolutePath, out var fallbackPath) ||
+            string.IsNullOrWhiteSpace(fallbackPath))
+        {
+            return;
+        }
+
+        var fallbackUri = new Uri(request.RequestUri, fallbackPath);
+        Logger.LogDebug("Remapped {Original} to fallback {Fallback}", request.RequestUri, fallbackUri);
+        request.RequestUri = fallbackUri;
+        request.Hash = null;
     }
 
     public override void Dispose()

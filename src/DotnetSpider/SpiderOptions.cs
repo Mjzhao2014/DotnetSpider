@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace DotnetSpider;
 
 public class SpiderOptions
@@ -46,4 +49,19 @@ public class SpiderOptions
     /// 获取新代码的时间间隔
     /// </summary>
     public int RefreshProxy { get; set; } = 30;
+
+    /// <summary>
+    /// Whether to enable respecting robots.txt rules for target hosts.
+    /// When enabled, the spider will attempt to fetch and parse each host's
+    /// robots.txt file and apply Allow/Disallow/Crawl-delay directives accordingly.
+    /// </summary>
+    public bool UseRobotsTxt { get; set; } = false;
+
+    /// <summary>
+    /// Mapping of host-specific fallback paths to try when a request returns a terminal
+    /// status such as 404 or 410. Useful for substituting legacy or relocated resources.
+    /// Keys are host names, values are maps of original absolute paths to fallback paths.
+    /// </summary>
+    public IDictionary<string, IDictionary<string, string>> RequestFallbacks { get; } =
+        new Dictionary<string, IDictionary<string, string>>(StringComparer.OrdinalIgnoreCase);
 }
